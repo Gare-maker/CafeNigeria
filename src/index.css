@@ -1,0 +1,490 @@
+:root {
+  --bg-ivory: #FBF9F5;
+  --bg-stone: #EFECE3;
+  --bg-stone-dark: #E5E1D5;
+  --bg-navy: #0A194E;
+  --bg-navy-deep: #07123A;
+  --ink-navy: #0D1B4C;
+  --ink-body: #1E2B58;
+  --ink-muted: #565F7A;
+  --ink-faint: #7D849B;
+  --accent-blue: #1447E6;
+  --accent-blue-hover: #0E37B8;
+  --accent-terracotta: #D94E34;
+  --border-ivory: #E6E3DA;
+  --border-stone: #DAD6CA;
+  --font-sans: 'Plus Jakarta Sans', 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+  --font-mono: 'IBM Plex Mono', monospace;
+}
+
+[data-theme="dark"] {
+  --bg-ivory: #071135;
+  --bg-stone: #0A1747;
+  --bg-stone-dark: #0E1F5C;
+  --ink-navy: #FBF9F5;
+  --ink-body: #DCE3F7;
+  --ink-muted: #9BA7CA;
+  --ink-faint: #6E7B9E;
+  --border-ivory: rgba(255, 255, 255, 0.12);
+  --border-stone: rgba(255, 255, 255, 0.16);
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html, body {
+  background-color: var(--bg-ivory);
+  color: var(--ink-navy);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  line-height: 1.5;
+  font-size: 15px;
+  overflow-x: hidden;
+}
+
+button, input, select, textarea {
+  font-family: inherit;
+  border-radius: 0;
+}
+
+/* Global Consistent Content Container (Section 4) */
+.nc-container {
+  width: 100%;
+  max-width: 1060px;
+  margin: 0 auto;
+  padding-left: 24px;
+  padding-right: 24px;
+}
+
+/* Typography */
+.mono-label {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+}
+
+.display-heading {
+  font-family: var(--font-sans);
+  font-weight: 800;
+  font-size: clamp(1.7rem, 2.8vw, 2.35rem);
+  line-height: 1.12;
+  letter-spacing: -0.03em;
+  color: var(--ink-navy);
+}
+
+/* Buttons */
+.btn-ed-primary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  background-color: var(--accent-blue);
+  color: #FFFFFF;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.09em;
+  padding: 10px 16px;
+  border: 1px solid var(--accent-blue);
+  cursor: pointer;
+  transition: background-color 0.15s ease, border-color 0.15s ease;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.btn-ed-primary:hover:not(:disabled) {
+  background-color: var(--accent-blue-hover);
+  border-color: var(--accent-blue-hover);
+}
+
+.btn-ed-primary:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.btn-ed-outline {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  background-color: transparent;
+  color: var(--ink-navy);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.09em;
+  padding: 10px 16px;
+  border: 1px solid var(--border-stone);
+  cursor: pointer;
+  transition: border-color 0.15s ease, background-color 0.15s ease;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.btn-ed-outline:hover:not(:disabled) {
+  border-color: var(--ink-navy);
+  background-color: rgba(13, 27, 76, 0.04);
+}
+
+.btn-ed-subtle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  background-color: transparent;
+  color: var(--ink-navy);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  padding: 6px 10px;
+  border: 1px solid var(--border-ivory);
+  cursor: pointer;
+  transition: border-color 0.15s ease, background-color 0.15s ease;
+  white-space: nowrap;
+}
+
+.btn-ed-subtle:hover:not(:disabled) {
+  border-color: var(--border-stone);
+  background-color: rgba(13, 27, 76, 0.04);
+}
+
+.btn-ed-subtle:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Inputs */
+.ed-input, .ed-select, .ed-textarea {
+  width: 100%;
+  background-color: var(--bg-ivory);
+  border: 1px solid var(--border-stone);
+  color: var(--ink-navy);
+  padding: 9px 12px;
+  font-size: 13.5px;
+  font-family: var(--font-sans);
+  outline: none;
+  transition: border-color 0.15s ease;
+}
+
+.ed-input:focus, .ed-select:focus, .ed-textarea:focus {
+  border-color: var(--accent-blue);
+}
+
+.ed-field-label {
+  display: block;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.09em;
+  color: var(--ink-muted);
+  margin-bottom: 5px;
+}
+
+/* Compact, Balanced Homepage Category Cards (Section 2) */
+.nc-category-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 16px;
+}
+
+.nc-category-card {
+  border: 1px solid var(--border-ivory);
+  background-color: var(--bg-ivory);
+  padding: 18px 20px;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  cursor: pointer;
+  text-align: left;
+  transition: border-color 0.15s ease, background-color 0.15s ease;
+  min-height: 148px;
+  overflow: hidden;
+}
+
+.nc-category-card:hover {
+  border-color: var(--border-stone);
+  background-color: var(--bg-stone);
+}
+
+/* Responsive Document List: Desktop Table vs Mobile Cards */
+.nc-doc-table-desktop {
+  display: block;
+  border: 1px solid var(--border-ivory);
+  background-color: var(--bg-ivory);
+}
+
+.nc-doc-cards-mobile {
+  display: none;
+}
+
+/* Multi-Page Document Editor Canvas */
+.doc-workspace-canvas-wrap {
+  background-color: var(--bg-stone);
+  overflow-y: auto;
+  overflow-x: auto;
+  padding: 24px 18px 64px 18px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 24px;
+}
+
+.doc-a4-page {
+  background-color: #FFFFFF;
+  color: #111827;
+  width: 794px;
+  min-height: 1122px;
+  border: 1px solid var(--border-stone);
+  box-shadow: 0 2px 8px rgba(10, 25, 78, 0.04);
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  position: relative;
+  flex-shrink: 0;
+}
+
+.doc-editable-body {
+  outline: none;
+  flex: 1;
+  line-height: 1.75;
+  font-size: 12pt;
+  color: #111827;
+  min-height: 820px;
+  position: relative;
+  z-index: 2;
+}
+
+.doc-editable-body h1 {
+  font-size: 17pt;
+  font-weight: 700;
+  margin: 0.7em 0 0.4em;
+  color: #0A194E;
+  line-height: 1.25;
+}
+
+.doc-editable-body h2 {
+  font-size: 13.5pt;
+  font-weight: 700;
+  margin: 0.75em 0 0.35em;
+  color: #0D1B4C;
+  line-height: 1.3;
+}
+
+.doc-editable-body h3 {
+  font-size: 12pt;
+  font-weight: 600;
+  margin: 0.6em 0 0.3em;
+  color: #1E2B58;
+}
+
+.doc-editable-body p {
+  margin-bottom: 0.75em;
+}
+
+.doc-editable-body ul, .doc-editable-body ol {
+  margin: 0.5em 0 0.85em 1.6em;
+}
+
+.doc-editable-body li {
+  margin-bottom: 0.3em;
+}
+
+.doc-editable-body table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 1em 0;
+  table-layout: auto;
+}
+
+.doc-editable-body th, .doc-editable-body td {
+  border: 1px solid #94A3B8;
+  padding: 8px 12px;
+  text-align: left;
+  font-size: 11pt;
+  min-width: 60px;
+  position: relative;
+}
+
+.doc-editable-body th {
+  background-color: #F1F5F9;
+  font-weight: 600;
+}
+
+/* Persistent AI Highlighted Selection Marker inside Document */
+mark.ai-persistent-selection {
+  background-color: rgba(20, 71, 230, 0.16);
+  border-bottom: 2px solid #1447E6;
+  color: inherit;
+  padding: 1px 0;
+}
+
+/* Creation & Page Layout Modal Responsive Container */
+.nc-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background-color: rgba(10, 25, 78, 0.52);
+  z-index: 200;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+}
+
+.nc-modal-dialog {
+  width: 100%;
+  max-width: 660px;
+  max-height: 90vh;
+  background-color: var(--bg-ivory);
+  border: 1px solid var(--border-stone);
+  box-shadow: 0 12px 32px rgba(10, 25, 78, 0.14);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* Workspace Layout, Left Groups Sidebar & Right AI Drawer */
+.nc-workspace-body {
+  display: flex;
+  flex: 1;
+  overflow: hidden;
+  position: relative;
+}
+
+.nc-groups-sidebar {
+  width: 240px;
+  background-color: var(--bg-ivory);
+  border-right: 1px solid var(--border-ivory);
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  flex-shrink: 0;
+}
+
+.nc-ai-panel {
+  width: 340px;
+  background-color: var(--bg-ivory);
+  border-left: 1px solid var(--border-ivory);
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  flex-shrink: 0;
+}
+
+/* Voice Waveform Animation */
+@keyframes pulseWave {
+  0%, 100% { transform: scaleY(0.35); }
+  50% { transform: scaleY(1); }
+}
+
+.voice-bar {
+  width: 3px;
+  height: 16px;
+  background-color: var(--accent-terracotta);
+  display: inline-block;
+  animation: pulseWave 0.75s ease-in-out infinite;
+}
+
+/* Tablet Breakpoint */
+@media (max-width: 1024px) {
+  .nc-category-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+  .doc-a4-page {
+    width: 100% !important;
+    max-width: 740px;
+    min-height: 960px;
+  }
+  .nc-ai-panel {
+    position: absolute;
+    right: 0;
+    top: 0;
+    bottom: 0;
+    z-index: 45;
+    width: 330px;
+    box-shadow: -8px 0 24px rgba(10, 25, 78, 0.14);
+  }
+  .nc-groups-sidebar {
+    position: absolute;
+    left: 0;
+    top: 0;
+    bottom: 0;
+    z-index: 45;
+    width: 250px;
+    box-shadow: 8px 0 24px rgba(10, 25, 78, 0.14);
+  }
+}
+
+/* Mobile Breakpoint */
+@media (max-width: 720px) {
+  .nc-container {
+    padding-left: 16px;
+    padding-right: 16px;
+  }
+  .nc-category-grid {
+    grid-template-columns: 1fr;
+    gap: 12px;
+  }
+  .nc-category-card {
+    min-height: auto;
+    padding: 16px 18px;
+  }
+  .nc-doc-table-desktop {
+    display: none;
+  }
+  .nc-doc-cards-mobile {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+  .nc-modal-backdrop {
+    padding: 0;
+  }
+  .nc-modal-dialog {
+    max-width: 100%;
+    height: 100vh;
+    max-height: 100vh;
+    border: none;
+  }
+  .doc-workspace-canvas-wrap {
+    padding: 12px 8px 48px 8px;
+    gap: 16px;
+  }
+  .doc-a4-page {
+    width: 100% !important;
+    min-height: 720px;
+    padding: 24px 18px !important;
+  }
+  .nc-ai-panel, .nc-groups-sidebar {
+    width: 100%;
+  }
+  .hide-on-mobile {
+    display: none !important;
+  }
+}
+
+@media print {
+  .no-print {
+    display: none !important;
+  }
+  body, .doc-workspace-canvas-wrap {
+    background: #FFFFFF !important;
+    padding: 0 !important;
+  }
+  .doc-a4-page {
+    border: none !important;
+    box-shadow: none !important;
+    width: 100% !important;
+    page-break-after: always;
+  }
+}
