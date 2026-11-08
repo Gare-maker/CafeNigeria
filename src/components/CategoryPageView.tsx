@@ -134,13 +134,7 @@ export const CategoryPageView: React.FC<CategoryPageViewProps> = ({
             </h2>
 
             {/* Search Field */}
-            <div
-              style={{
-                position: 'relative',
-                width: '240px',
-                maxWidth: '100%',
-              }}
-            >
+            <div className="nc-category-search">
               <Search
                 size={13}
                 style={{

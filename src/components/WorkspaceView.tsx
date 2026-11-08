@@ -166,7 +166,9 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
   const [promptInput, setPromptInput] = useState('');
   const [isAiLoading, setIsAiLoading] = useState(false);
   const [showExportMenu, setShowExportMenu] = useState(false);
-  const [showAiPanel, setShowAiPanel] = useState(true);
+  const [showAiPanel, setShowAiPanel] = useState<boolean>(() =>
+    typeof window !== 'undefined' ? window.innerWidth > 1024 : true
+  );
   const [lineSpacing, setLineSpacing] = useState('1.75');
 
   // Section 7B: Table Popover & Contextual Table Editing State
@@ -808,15 +810,31 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
     triggerAutoSave({ overrideDrawings: next });
   };
 
+  const getPointerCoords = (
+    e: React.MouseEvent<SVGSVGElement> | React.TouchEvent<SVGSVGElement>
+  ) => {
+    const rect = e.currentTarget.getBoundingClientRect();
+    const clientX =
+      'touches' in e && e.touches.length > 0
+        ? e.touches[0].clientX
+        : (e as React.MouseEvent<SVGSVGElement>).clientX;
+    const clientY =
+      'touches' in e && e.touches.length > 0
+        ? e.touches[0].clientY
+        : (e as React.MouseEvent<SVGSVGElement>).clientY;
+    return {
+      x: Math.round(clientX - rect.left),
+      y: Math.round(clientY - rect.top),
+    };
+  };
+
   const handlePagePointerDown = (
     pageIdx: number,
-    e: React.MouseEvent<SVGSVGElement>
+    e: React.MouseEvent<SVGSVGElement> | React.TouchEvent<SVGSVGElement>
   ) => {
     if (!showDrawingBar || activeShapeTool === 'select') return;
     e.stopPropagation();
-    const rect = e.currentTarget.getBoundingClientRect();
-    const x = Math.round(e.clientX - rect.left);
-    const y = Math.round(e.clientY - rect.top);
+    const { x, y } = getPointerCoords(e);
 
     const newId = `drw-${Date.now()}`;
     const newShape: DrawingElement = {
@@ -852,12 +870,10 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
 
   const handlePagePointerMove = (
     pageIdx: number,
-    e: React.MouseEvent<SVGSVGElement>
+    e: React.MouseEvent<SVGSVGElement> | React.TouchEvent<SVGSVGElement>
   ) => {
     if (!dragState || dragState.pageIdx !== pageIdx) return;
-    const rect = e.currentTarget.getBoundingClientRect();
-    const x = Math.round(e.clientX - rect.left);
-    const y = Math.round(e.clientY - rect.top);
+    const { x, y } = getPointerCoords(e);
 
     setDrawings((prev) =>
       prev.map((d) => {
@@ -1023,6 +1039,9 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
           overrideHtml: getCombinedCleanHtml(nextPages),
           overrideAiHistory: updatedHistory,
         });
+        if (typeof window !== 'undefined' && window.innerWidth <= 1024) {
+          setShowAiPanel(false);
+        }
         return;
       }
     }
@@ -1094,6 +1113,9 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
       m.id === msg.id ? { ...m, inserted: true } : m
     );
     triggerAutoSave({ overrideAiHistory: updatedHistory });
+    if (typeof window !== 'undefined' && window.innerWidth <= 1024) {
+      setShowAiPanel(false);
+    }
   };
 
   const handleSendAiPrompt = (customInstruction?: string) => {
@@ -2557,16 +2579,20 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
                         ? 'rgba(20, 71, 230, 0.02)'
                         : 'transparent',
                       marginBottom: '12px',
-                      cursor:
+                       cursor:
                         showDrawingBar && activeShapeTool !== 'select'
                           ? 'crosshair'
                           : 'default',
+                      touchAction: showDrawingBar ? 'none' : 'auto',
                       display: 'block',
                       zIndex: 5,
                     }}
                     onMouseDown={(e) => handlePagePointerDown(pageIdx, e)}
                     onMouseMove={(e) => handlePagePointerMove(pageIdx, e)}
                     onMouseUp={handlePagePointerUp}
+                    onTouchStart={(e) => handlePagePointerDown(pageIdx, e)}
+                    onTouchMove={(e) => handlePagePointerMove(pageIdx, e)}
+                    onTouchEnd={handlePagePointerUp}
                   >
                     <defs>
                       <marker
@@ -2800,6 +2826,65 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
               </div>
             );
           })}
+
+          {/* Bottom Add Page Button on Canvas */}
+          <button
+            onClick={handleAddBlankPage}
+            className="btn-ed-outline no-print"
+            style={{ backgroundColor: 'var(--bg-ivory)' }}
+          >
+            <FilePlus2 size={14} color="var(--accent-blue)" />
+            <span>+ Add New Blank Page</span>
+          </button>
+        </div>
+
+        {/* Mobile Floating Quick-Access Action Bar */}
+        <div
+          className="show-on-mobile no-print"
+          style={{
+            position: 'fixed',
+            bottom: '12px',
+            left: '50%',
+            transform: 'translateX(-50%)',
+            zIndex: 42,
+            backgroundColor: 'var(--bg-ivory)',
+            border: '1px solid var(--border-stone)',
+            boxShadow: '0 6px 20px rgba(10, 25, 78, 0.16)',
+            padding: '5px 8px',
+            gap: '6px',
+            alignItems: 'center',
+          }}
+        >
+          <button
+            onClick={handleAddBlankPage}
+            className="btn-ed-subtle"
+            style={{ padding: '6px 9px', fontSize: '9.5px' }}
+          >
+            <FilePlus2 size={12} color="var(--accent-blue)" />
+            <span>+ Page</span>
+          </button>
+          <button
+            onClick={() => {
+              setShowAiPanel(false);
+              setShowGroupsSidebar((p) => !p);
+            }}
+            className="btn-ed-subtle"
+            style={{ padding: '6px 9px', fontSize: '9.5px' }}
+          >
+            <Layers size={12} color="var(--accent-blue)" />
+            <span>Groups ({pageGroups.length})</span>
+          </button>
+          <button
+            onClick={() => {
+              setShowGroupsSidebar(false);
+              setShowAiPanel((p) => !p);
+            }}
+            className="btn-ed-primary"
+            style={{ padding: '6px 11px', fontSize: '9.5px' }}
+          >
+            <Sparkles size={12} />
+            <span>AI Assistant</span>
+          </button>
         </div>
 
         {/* ===================================================================
@@ -3232,13 +3317,7 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
               }}
             >
               {/* Page Size & Orientation */}
-              <div
-                style={{
-                  display: 'grid',
-                  gridTemplateColumns: '1fr 1fr',
-                  gap: '12px',
-                }}
-              >
+              <div className="nc-grid-2col">
                 <div>
                   <label className="ed-field-label">Page Size</label>
                   <select
@@ -3308,7 +3387,14 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
               </div>
 
               {/* Scope for Orientation */}
-              <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+              <div
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '10px',
+                  flexWrap: 'wrap',
+                }}
+              >
                 <span className="ed-field-label" style={{ marginBottom: 0 }}>
                   Apply Orientation To:
                 </span>
@@ -3337,13 +3423,7 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
               </div>
 
               {layout.pageSize === 'Custom' && (
-                <div
-                  style={{
-                    display: 'grid',
-                    gridTemplateColumns: '1fr 1fr',
-                    gap: '12px',
-                  }}
-                >
+                <div className="nc-grid-2col">
                   <div>
                     <label className="ed-field-label">Custom Width (mm)</label>
                     <input
@@ -3382,13 +3462,15 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
                     display: 'flex',
                     justifyContent: 'space-between',
                     alignItems: 'center',
+                    flexWrap: 'wrap',
+                    gap: '6px',
                     marginBottom: '6px',
                   }}
                 >
                   <label className="ed-field-label" style={{ marginBottom: 0 }}>
                     Page Margins (mm)
                   </label>
-                  <div style={{ display: 'flex', gap: '5px' }}>
+                  <div style={{ display: 'flex', gap: '5px', flexWrap: 'wrap' }}>
                     {(
                       [
                         ['normal', 'Normal (25mm)', 25],
@@ -3418,13 +3500,7 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
                   </div>
                 </div>
 
-                <div
-                  style={{
-                    display: 'grid',
-                    gridTemplateColumns: 'repeat(4, 1fr)',
-                    gap: '8px',
-                  }}
-                >
+                <div className="nc-grid-4col">
                   {(
                     [
                       ['marginTopMm', 'Top'],
@@ -3456,13 +3532,7 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
               </div>
 
               {/* Page Columns */}
-              <div
-                style={{
-                  display: 'grid',
-                  gridTemplateColumns: '1fr 1fr',
-                  gap: '12px',
-                }}
-              >
+              <div className="nc-grid-2col">
                 <div>
                   <label className="ed-field-label">Page Columns</label>
                   <div style={{ display: 'flex', gap: '6px' }}>

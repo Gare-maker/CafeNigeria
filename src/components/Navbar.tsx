@@ -136,7 +136,8 @@ export const Navbar: React.FC<NavbarProps> = ({
           style={{
             display: 'flex',
             alignItems: 'center',
-            gap: '8px',
+            gap: '6px',
+            flexShrink: 0,
           }}
         >
           {/* Search Input (Desktop) */}
@@ -174,6 +175,28 @@ export const Navbar: React.FC<NavbarProps> = ({
               }}
             />
           </div>
+
+          {/* Search Toggle Button (Mobile) */}
+          <button
+            onClick={() => setShowMobileSearch((prev) => !prev)}
+            className="show-on-mobile"
+            title="Search documents"
+            style={{
+              width: '34px',
+              height: '34px',
+              border: '1px solid var(--border-ivory)',
+              backgroundColor: showMobileSearch
+                ? 'var(--bg-stone)'
+                : 'transparent',
+              color: 'var(--ink-navy)',
+              alignItems: 'center',
+              justifyContent: 'center',
+              cursor: 'pointer',
+              flexShrink: 0,
+            }}
+          >
+            <Search size={14} />
+          </button>
 
           {/*Online/Offline Synchronisation Indicator */}
           <button

@@ -81,18 +81,12 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
           synchronisation.
         </p>
 
-        <div
-          style={{
-            display: 'grid',
-            gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))',
-            gap: '20px',
-          }}
-        >
+        <div className="nc-settings-grid">
           {/* User Account & Operator Profile */}
           <div
             style={{
               border: '1px solid var(--border-ivory)',
-              padding: '24px',
+              padding: '20px',
               backgroundColor: 'var(--bg-ivory)',
             }}
           >
@@ -139,13 +133,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                 />
               </div>
 
-              <div
-                style={{
-                  display: 'grid',
-                  gridTemplateColumns: '1fr 1fr',
-                  gap: '12px',
-                }}
-              >
+              <div className="nc-grid-2col">
                 <div>
                   <label className="ed-field-label">Default Citation</label>
                   <select
