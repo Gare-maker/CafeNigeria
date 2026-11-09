@@ -1,10 +1,15 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { DocumentCategory, DocumentItem } from './types';
-import { INITIAL_DOCUMENTS } from './services/aiGenerator';
+import {
+  INITIAL_DOCUMENTS,
+  getCurrentFormattedDate,
+} from './services/aiGenerator';
 import {
   exportToDocx,
   exportToPdf,
   exportToTxt,
+  saveDocumentToComputerFile,
+  openDocumentFromComputerFile,
 } from './services/exportService';
 import { Navbar } from './components/Navbar';
 import { DashboardView } from './components/DashboardView';
@@ -13,7 +18,7 @@ import { WorkspaceView } from './components/WorkspaceView';
 import { CreateDocumentModal } from './components/CreateDocumentModal';
 import { SettingsView } from './components/TemplatesAndSettingsView';
 
-const STORAGE_KEY = 'nigerian_cafe_documents_v3';
+const STORAGE_KEY = 'nigerian_cafe_documents_v4';
 
 export function App() {
   const [documents, setDocuments] = useState<DocumentItem[]>(() => {
@@ -46,7 +51,10 @@ export function App() {
   const [darkMode, setDarkMode] = useState<boolean>(false);
   const [searchQuery, setSearchQuery] = useState<string>('');
 
-  // Persist documents automatically on every change (Section 8)
+  // Store local computer file handles keyed by document ID (Requirement 14)
+  const fileHandlesRef = useRef<Record<string, any>>({});
+
+  // Persist documents automatically on every change
   useEffect(() => {
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(documents));
@@ -113,12 +121,7 @@ export function App() {
   };
 
   const handleRenameDocument = (docId: string, newTitle: string) => {
-    const now = new Date();
-    const updatedAt = `${now.getFullYear()}-${String(
-      now.getMonth() + 1
-    ).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')} ${String(
-      now.getHours()
-    ).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+    const updatedAt = getCurrentFormattedDate();
 
     setDocuments((prev) =>
       prev.map((d) =>
@@ -137,12 +140,7 @@ export function App() {
   const handleDuplicateDocument = (docId: string) => {
     const target = documents.find((d) => d.id === docId);
     if (!target) return;
-    const now = new Date();
-    const timestamp = `${now.getFullYear()}-${String(
-      now.getMonth() + 1
-    ).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')} ${String(
-      now.getHours()
-    ).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+    const timestamp = getCurrentFormattedDate();
 
     const copy: DocumentItem = {
       ...target,
@@ -157,6 +155,54 @@ export function App() {
 
   const handleDeleteDocument = (docId: string) => {
     setDocuments((prev) => prev.filter((d) => d.id !== docId));
+  };
+
+  // Requirement 14: Save document directly to local computer file
+  const handleSaveToComputer = async (doc: DocumentItem) => {
+    try {
+      const existingHandle = fileHandlesRef.current[doc.id];
+      const result = await saveDocumentToComputerFile(doc, existingHandle);
+      if (result.handle) {
+        fileHandlesRef.current[doc.id] = result.handle;
+      }
+      if (result.fileName) {
+        handleUpdateDocument({
+          ...doc,
+          metadata: {
+            ...doc.metadata,
+            localFileName: result.fileName,
+          },
+        });
+      }
+    } catch {
+      // user cancelled or error
+    }
+  };
+
+  // Requirement 14: Open document from local computer file into the workspace
+  const handleOpenFromComputer = async () => {
+    try {
+      const opened = await openDocumentFromComputerFile();
+      if (!opened) return;
+      const { doc, handle } = opened;
+      if (handle) {
+        fileHandlesRef.current[doc.id] = handle;
+      }
+      setDocuments((prev) => {
+        const exists = prev.some((d) => d.id === doc.id);
+        if (exists) {
+          return prev.map((d) => (d.id === doc.id ? doc : d));
+        }
+        return [doc, ...prev];
+      });
+      setActiveCategory(doc.category);
+      setActiveDocumentId(doc.id);
+      setActiveView('workspace');
+    } catch (err: any) {
+      if (err?.message) {
+        alert(err.message);
+      }
+    }
   };
 
   const activeDocument =
@@ -197,6 +243,7 @@ export function App() {
               setActiveView('category');
             }}
             onOpenDocument={handleOpenDocument}
+            onOpenComputerFile={handleOpenFromComputer}
           />
         )}
 
@@ -214,6 +261,8 @@ export function App() {
             onRenameDocument={handleRenameDocument}
             onDuplicateDocument={handleDuplicateDocument}
             onDeleteDocument={handleDeleteDocument}
+            onSaveToComputer={handleSaveToComputer}
+            onOpenFromComputer={handleOpenFromComputer}
           />
         )}
 
@@ -230,6 +279,8 @@ export function App() {
             onExportDocx={exportToDocx}
             onExportPdf={exportToPdf}
             onExportTxt={exportToTxt}
+            onSaveToComputer={handleSaveToComputer}
+            onOpenFromComputer={handleOpenFromComputer}
           />
         )}
 
@@ -255,15 +306,22 @@ export function App() {
         )}
       </main>
 
-      {/* Specific Creation Modal (Section 4) */}
+      {/* Specific Creation Modal (Requirements 15, 16, 17) */}
       {createModalCategory && (
         <CreateDocumentModal
           category={createModalCategory}
           isOnline={isOnline}
           onToggleOnline={handleToggleOnline}
           onClose={() => setCreateModalCategory(null)}
-          onDocumentCreated={(newDoc) => {
-            setDocuments((prev) => [newDoc, ...prev]);
+          existingDocuments={documents}
+          onDocumentCreated={(newDoc, isUpdatingExisting) => {
+            if (isUpdatingExisting) {
+              setDocuments((prev) =>
+                prev.map((d) => (d.id === newDoc.id ? newDoc : d))
+              );
+            } else {
+              setDocuments((prev) => [newDoc, ...prev]);
+            }
             setCreateModalCategory(null);
             handleOpenDocument(newDoc.id);
           }}

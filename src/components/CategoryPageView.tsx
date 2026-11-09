@@ -8,9 +8,15 @@ import {
   ArrowLeft,
   Check,
   X,
+  HardDriveDownload,
+  HardDriveUpload,
 } from 'lucide-react';
 import { DocumentCategory, DocumentItem } from '../types';
-import { CATEGORY_PAGE_COPY } from '../services/aiGenerator';
+import {
+  CATEGORY_PAGE_COPY,
+  formatDisplayDate,
+  searchDocumentMatch,
+} from '../services/aiGenerator';
 
 interface CategoryPageViewProps {
   category: DocumentCategory;
@@ -22,6 +28,33 @@ interface CategoryPageViewProps {
   onRenameDocument: (docId: string, newTitle: string) => void;
   onDuplicateDocument: (docId: string) => void;
   onDeleteDocument: (docId: string) => void;
+  onSaveToComputer?: (doc: DocumentItem) => void;
+  onOpenFromComputer?: () => void;
+}
+
+function highlightMatchText(text: string, query: string): React.ReactNode {
+  const q = query.trim();
+  if (!q) return text;
+  const escaped = q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const regex = new RegExp(`(${escaped})`, 'gi');
+  const parts = text.split(regex);
+  return parts.map((part, i) =>
+    part.toLowerCase() === q.toLowerCase() ? (
+      <mark
+        key={i}
+        style={{
+          backgroundColor: '#FEF08A',
+          color: '#0A194E',
+          padding: '0 2px',
+          fontWeight: 700,
+        }}
+      >
+        {part}
+      </mark>
+    ) : (
+      part
+    )
+  );
 }
 
 export const CategoryPageView: React.FC<CategoryPageViewProps> = ({
@@ -34,21 +67,22 @@ export const CategoryPageView: React.FC<CategoryPageViewProps> = ({
   onRenameDocument,
   onDuplicateDocument,
   onDeleteDocument,
+  onSaveToComputer,
+  onOpenFromComputer,
 }) => {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editingTitle, setEditingTitle] = useState('');
 
   const pageCopy = CATEGORY_PAGE_COPY[category];
 
-  // Display ONLY documents belonging to this category
-  const categoryDocs = documents
+  // Display documents belonging to this category and search across Title, Full Content, and Metadata (Requirement 2)
+  const categoryDocsWithMatch = documents
     .filter((doc) => doc.category === category)
-    .filter((doc) => {
-      if (!searchQuery.trim()) return true;
-      const q = searchQuery.toLowerCase();
-      return doc.title.toLowerCase().includes(q);
-    })
-    .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+    .map((doc) => ({
+      doc,
+      match: searchDocumentMatch(doc, searchQuery),
+    }))
+    .filter((item) => item.match.matched);
 
   const startRename = (doc: DocumentItem) => {
     setEditingId(doc.id);
@@ -96,7 +130,7 @@ export const CategoryPageView: React.FC<CategoryPageViewProps> = ({
           <ArrowLeft size={13} /> Back to Home
         </button>
 
-        {/* Page Header (Introductory heading & description only — single Create button is in the top header per Section 3) */}
+        {/* Page Header */}
         <div style={{ maxWidth: '620px', marginBottom: '36px' }}>
           <h1 className="display-heading">{pageCopy.heading}</h1>
           <p
@@ -130,33 +164,73 @@ export const CategoryPageView: React.FC<CategoryPageViewProps> = ({
                 color: 'var(--ink-navy)',
               }}
             >
-              Previously Created Documents ({categoryDocs.length})
+              Previously Created Documents ({categoryDocsWithMatch.length})
             </h2>
 
-            {/* Search Field */}
-            <div className="nc-category-search">
-              <Search
-                size={13}
-                style={{
-                  position: 'absolute',
-                  left: '10px',
-                  top: '50%',
-                  transform: 'translateY(-50%)',
-                  color: 'var(--ink-muted)',
-                }}
-              />
-              <input
-                type="text"
-                value={searchQuery}
-                onChange={(e) => onSearchChange(e.target.value)}
-                placeholder="Search by document name..."
-                className="ed-input"
-                style={{ padding: '7px 11px 7px 30px', fontSize: '12.5px' }}
-              />
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '8px',
+                flexWrap: 'wrap',
+              }}
+            >
+              {onOpenFromComputer && (
+                <button
+                  onClick={onOpenFromComputer}
+                  className="btn-ed-subtle"
+                  style={{ height: '34px', padding: '0 11px' }}
+                  title="Open an individual document file from your computer"
+                >
+                  <HardDriveUpload size={12} color="var(--accent-blue)" />
+                  <span>Open File</span>
+                </button>
+              )}
+
+              {/* Search Field (Searches both Document Titles and Inside Document Content) */}
+              <div className="nc-category-search" style={{ width: '280px' }}>
+                <Search
+                  size={13}
+                  style={{
+                    position: 'absolute',
+                    left: '10px',
+                    top: '50%',
+                    transform: 'translateY(-50%)',
+                    color: 'var(--ink-muted)',
+                  }}
+                />
+                <input
+                  type="text"
+                  value={searchQuery}
+                  onChange={(e) => onSearchChange(e.target.value)}
+                  placeholder="Search titles or content inside docs..."
+                  className="ed-input"
+                  style={{ padding: '7px 28px 7px 30px', fontSize: '12.5px' }}
+                />
+                {searchQuery && (
+                  <button
+                    onClick={() => onSearchChange('')}
+                    style={{
+                      position: 'absolute',
+                      right: '8px',
+                      top: '50%',
+                      transform: 'translateY(-50%)',
+                      background: 'none',
+                      border: 'none',
+                      cursor: 'pointer',
+                      color: 'var(--ink-muted)',
+                      display: 'flex',
+                    }}
+                    title="Clear search"
+                  >
+                    <X size={12} />
+                  </button>
+                )}
+              </div>
             </div>
           </div>
 
-          {categoryDocs.length === 0 ? (
+          {categoryDocsWithMatch.length === 0 ? (
             <div
               style={{
                 border: '1px solid var(--border-ivory)',
@@ -171,9 +245,18 @@ export const CategoryPageView: React.FC<CategoryPageViewProps> = ({
                   color: 'var(--ink-muted)',
                 }}
               >
-                No documents found in this category yet. Use the{' '}
-                <strong>{pageCopy.buttonLabel}</strong> button in the header to
-                create one.
+                {searchQuery.trim() ? (
+                  <>
+                    No documents or content inside this category matched "
+                    <strong>{searchQuery}</strong>".
+                  </>
+                ) : (
+                  <>
+                    No documents found in this category yet. Use the{' '}
+                    <strong>{pageCopy.buttonLabel}</strong> button in the header
+                    to create one.
+                  </>
+                )}
               </p>
             </div>
           ) : (
@@ -183,7 +266,7 @@ export const CategoryPageView: React.FC<CategoryPageViewProps> = ({
                 <div
                   style={{
                     display: 'grid',
-                    gridTemplateColumns: '2.6fr 1.1fr 1.1fr 0.8fr 1.4fr',
+                    gridTemplateColumns: '2.5fr 1.1fr 1.1fr 0.75fr 1.55fr',
                     padding: '11px 16px',
                     backgroundColor: 'var(--bg-stone)',
                     borderBottom: '1px solid var(--border-ivory)',
@@ -195,14 +278,14 @@ export const CategoryPageView: React.FC<CategoryPageViewProps> = ({
                     color: 'var(--ink-muted)',
                   }}
                 >
-                  <div>Document Name</div>
+                  <div>Document Name &amp; Content Match</div>
                   <div>Date Created</div>
                   <div>Last Modified</div>
                   <div>Status</div>
                   <div style={{ textAlign: 'right' }}>Actions</div>
                 </div>
 
-                {categoryDocs.map((doc, idx) => {
+                {categoryDocsWithMatch.map(({ doc, match }, idx) => {
                   const isRenaming = editingId === doc.id;
                   const statusLabel = getDisplayStatus(doc);
 
@@ -211,18 +294,18 @@ export const CategoryPageView: React.FC<CategoryPageViewProps> = ({
                       key={doc.id}
                       style={{
                         display: 'grid',
-                        gridTemplateColumns: '2.6fr 1.1fr 1.1fr 0.8fr 1.4fr',
+                        gridTemplateColumns: '2.5fr 1.1fr 1.1fr 0.75fr 1.55fr',
                         padding: '14px 16px',
                         borderBottom:
-                          idx < categoryDocs.length - 1
+                          idx < categoryDocsWithMatch.length - 1
                             ? '1px solid var(--border-ivory)'
                             : 'none',
                         alignItems: 'center',
                         gap: '12px',
                       }}
                     >
-                      {/* Document Name */}
-                      <div>
+                      {/* Document Name + Content Search Snippet */}
+                      <div style={{ minWidth: 0 }}>
                         {isRenaming ? (
                           <div
                             style={{
@@ -261,25 +344,82 @@ export const CategoryPageView: React.FC<CategoryPageViewProps> = ({
                             </button>
                           </div>
                         ) : (
-                          <button
-                            onClick={() => onOpenDocument(doc.id)}
-                            style={{
-                              background: 'none',
-                              border: 'none',
-                              textAlign: 'left',
-                              fontWeight: 600,
-                              fontSize: '14px',
-                              color: 'var(--ink-navy)',
-                              cursor: 'pointer',
-                              padding: 0,
-                            }}
-                          >
-                            {doc.title}
-                          </button>
+                          <div>
+                            <div
+                              style={{
+                                display: 'flex',
+                                alignItems: 'center',
+                                gap: '8px',
+                                flexWrap: 'wrap',
+                              }}
+                            >
+                              <button
+                                onClick={() => onOpenDocument(doc.id)}
+                                style={{
+                                  background: 'none',
+                                  border: 'none',
+                                  textAlign: 'left',
+                                  fontWeight: 600,
+                                  fontSize: '14px',
+                                  color: 'var(--ink-navy)',
+                                  cursor: 'pointer',
+                                  padding: 0,
+                                }}
+                              >
+                                {highlightMatchText(doc.title, searchQuery)}
+                              </button>
+
+                              {searchQuery.trim() && match.matchLocation && (
+                                <span
+                                  className="mono-label"
+                                  style={{
+                                    fontSize: '8.5px',
+                                    padding: '2px 6px',
+                                    backgroundColor: 'var(--bg-stone)',
+                                    border: '1px solid var(--border-stone)',
+                                    color: 'var(--accent-blue)',
+                                  }}
+                                >
+                                  Matched in {match.matchLocation}
+                                </span>
+                              )}
+
+                              {doc.metadata.localFileName && (
+                                <span
+                                  className="mono-label"
+                                  style={{
+                                    fontSize: '8.5px',
+                                    padding: '1px 5px',
+                                    backgroundColor: 'var(--bg-stone)',
+                                    color: 'var(--ink-muted)',
+                                  }}
+                                  title="Linked to local computer file"
+                                >
+                                  {doc.metadata.localFileName}
+                                </span>
+                              )}
+                            </div>
+
+                            {searchQuery.trim() && match.snippet && (
+                              <div
+                                style={{
+                                  marginTop: '5px',
+                                  padding: '5px 8px',
+                                  backgroundColor: 'var(--bg-stone)',
+                                  borderLeft: '2px solid var(--accent-blue)',
+                                  fontSize: '11.5px',
+                                  color: 'var(--ink-body)',
+                                  lineHeight: 1.4,
+                                }}
+                              >
+                                {highlightMatchText(match.snippet, searchQuery)}
+                              </div>
+                            )}
+                          </div>
                         )}
                       </div>
 
-                      {/* Date Created */}
+                      {/* Date Created (Month in Words per Requirement 3) */}
                       <div
                         style={{
                           fontFamily: 'var(--font-mono)',
@@ -287,10 +427,10 @@ export const CategoryPageView: React.FC<CategoryPageViewProps> = ({
                           color: 'var(--ink-muted)',
                         }}
                       >
-                        {doc.createdAt}
+                        {formatDisplayDate(doc.createdAt)}
                       </div>
 
-                      {/* Last Modified */}
+                      {/* Last Modified (Month in Words per Requirement 3) */}
                       <div
                         style={{
                           fontFamily: 'var(--font-mono)',
@@ -298,7 +438,7 @@ export const CategoryPageView: React.FC<CategoryPageViewProps> = ({
                           color: 'var(--ink-body)',
                         }}
                       >
-                        {doc.updatedAt}
+                        {formatDisplayDate(doc.updatedAt)}
                       </div>
 
                       {/* Status */}
@@ -317,12 +457,13 @@ export const CategoryPageView: React.FC<CategoryPageViewProps> = ({
                         </span>
                       </div>
 
-                      {/* Actions: Open, Rename, Duplicate, Delete */}
+                      {/* Actions: Open, Save File, Rename, Duplicate, Delete */}
                       <div
                         style={{
                           display: 'flex',
                           justifyContent: 'flex-end',
                           gap: '5px',
+                          flexWrap: 'wrap',
                         }}
                       >
                         <button
@@ -333,6 +474,16 @@ export const CategoryPageView: React.FC<CategoryPageViewProps> = ({
                         >
                           <FolderOpen size={12} /> Open
                         </button>
+                        {onSaveToComputer && (
+                          <button
+                            onClick={() => onSaveToComputer(doc)}
+                            className="btn-ed-subtle"
+                            style={{ padding: '5px 7px' }}
+                            title="Save as Individual File on Computer"
+                          >
+                            <HardDriveDownload size={12} />
+                          </button>
+                        )}
                         <button
                           onClick={() => startRename(doc)}
                           className="btn-ed-subtle"
@@ -368,7 +519,7 @@ export const CategoryPageView: React.FC<CategoryPageViewProps> = ({
 
               {/* Mobile Responsive Cards View */}
               <div className="nc-doc-cards-mobile">
-                {categoryDocs.map((doc) => {
+                {categoryDocsWithMatch.map(({ doc, match }) => {
                   const statusLabel = getDisplayStatus(doc);
                   return (
                     <div
@@ -394,8 +545,23 @@ export const CategoryPageView: React.FC<CategoryPageViewProps> = ({
                           display: 'block',
                         }}
                       >
-                        {doc.title}
+                        {highlightMatchText(doc.title, searchQuery)}
                       </button>
+
+                      {searchQuery.trim() && match.snippet && (
+                        <div
+                          style={{
+                            marginBottom: '8px',
+                            padding: '6px 8px',
+                            backgroundColor: 'var(--bg-stone)',
+                            borderLeft: '2px solid var(--accent-blue)',
+                            fontSize: '11.5px',
+                            color: 'var(--ink-body)',
+                          }}
+                        >
+                          {highlightMatchText(match.snippet, searchQuery)}
+                        </div>
+                      )}
 
                       <div
                         style={{
@@ -407,8 +573,8 @@ export const CategoryPageView: React.FC<CategoryPageViewProps> = ({
                           marginBottom: '12px',
                         }}
                       >
-                        <span>Created: {doc.createdAt}</span>
-                        <span>Modified: {doc.updatedAt}</span>
+                        <span>Created: {formatDisplayDate(doc.createdAt)}</span>
+                        <span>Modified: {formatDisplayDate(doc.updatedAt)}</span>
                         <span
                           className="mono-label"
                           style={{
@@ -437,6 +603,14 @@ export const CategoryPageView: React.FC<CategoryPageViewProps> = ({
                         >
                           Open
                         </button>
+                        {onSaveToComputer && (
+                          <button
+                            onClick={() => onSaveToComputer(doc)}
+                            className="btn-ed-subtle"
+                          >
+                            Save File
+                          </button>
+                        )}
                         <button
                           onClick={() => {
                             const next = window.prompt(

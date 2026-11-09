@@ -3,37 +3,59 @@ import {
   X,
   Mic,
   Square,
-  Upload,
-  Sparkles,
+  Paperclip,
+  Send,
   FileText,
   ChevronDown,
   ChevronUp,
   WifiOff,
-  Trash2,
   AlertCircle,
+  FolderOpen,
+  FilePlus,
+  HardDriveUpload,
 } from 'lucide-react';
 import { DocumentCategory, DocumentItem } from '../types';
 import {
   CATEGORY_PAGE_COPY,
+  formatDisplayDate,
   generateDocumentFromNaturalPrompt,
+  getCurrentFormattedDate,
+  modifyExistingDocumentWithAI,
 } from '../services/aiGenerator';
+import { openDocumentFromComputerFile } from '../services/exportService';
 
 interface CreateDocumentModalProps {
   category: DocumentCategory;
+  existingDocuments: DocumentItem[];
   isOnline: boolean;
   onToggleOnline: () => void;
   onClose: () => void;
-  onDocumentCreated: (doc: DocumentItem) => void;
+  onDocumentCreated: (doc: DocumentItem, isUpdatingExisting?: boolean) => void;
 }
 
 export const CreateDocumentModal: React.FC<CreateDocumentModalProps> = ({
   category,
+  existingDocuments,
   isOnline,
   onToggleOnline,
   onClose,
   onDocumentCreated,
 }) => {
   const copy = CATEGORY_PAGE_COPY[category];
+
+  // Requirement 15 & 17: Option A (Create New) vs Option B (Continue with Existing Document)
+  const [workflowMode, setWorkflowMode] = useState<'new' | 'existing'>('new');
+  const [selectedExistingDocId, setSelectedExistingDocId] = useState<string>(
+    () => {
+      const sameCat = existingDocuments.find((d) => d.category === category);
+      return sameCat ? sameCat.id : existingDocuments[0]?.id || '';
+    }
+  );
+  const [importedComputerDoc, setImportedComputerDoc] =
+    useState<DocumentItem | null>(null);
+  const [preserveMode, setPreserveMode] = useState<'copy' | 'overwrite'>(
+    'copy'
+  );
 
   const [prompt, setPrompt] = useState('');
   const [interimTranscript, setInterimTranscript] = useState('');
@@ -55,10 +77,23 @@ export const CreateDocumentModal: React.FC<CreateDocumentModalProps> = ({
   const [referencingStyle, setReferencingStyle] = useState('APA 7th Edition');
   const [wordCount, setWordCount] = useState('');
 
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
   const recognitionRef = useRef<any>(null);
   const streamIntervalRef = useRef<number | null>(null);
   const mediaStreamRef = useRef<MediaStream | null>(null);
   const gotNativeResultRef = useRef<boolean>(false);
+
+  // Requirement 9: Auto-expand textarea height vertically as more text is entered
+  const combinedInputText = interimTranscript
+    ? `${prompt}${prompt ? ' ' : ''}${interimTranscript}`
+    : prompt;
+
+  useEffect(() => {
+    const el = textareaRef.current;
+    if (!el) return;
+    el.style.height = 'auto';
+    el.style.height = `${Math.max(115, Math.min(el.scrollHeight, 280))}px`;
+  }, [combinedInputText]);
 
   const cleanupRecording = () => {
     if (recognitionRef.current) {
@@ -96,7 +131,7 @@ export const CreateDocumentModal: React.FC<CreateDocumentModalProps> = ({
       setInterimTranscript('');
     }
     setRecordingMessage(
-      'Recording stopped. You can review and edit the transcribed text above.'
+      'Voice transcription complete. Review and edit your text above before submitting.'
     );
   };
 
@@ -113,7 +148,11 @@ export const CreateDocumentModal: React.FC<CreateDocumentModalProps> = ({
         'Organise the uploaded lecture notes into clear headings bullet points concept explanations and five self-test revision questions.',
     };
 
-    const words = samplePrompts[category].split(' ');
+    const words = (
+      workflowMode === 'existing'
+        ? 'Update this document by expanding the analysis section adding a comparative summary table and strengthening the policy recommendations with recent empirical citations.'
+        : samplePrompts[category]
+    ).split(' ');
     let idx = 0;
 
     streamIntervalRef.current = window.setInterval(() => {
@@ -145,7 +184,6 @@ export const CreateDocumentModal: React.FC<CreateDocumentModalProps> = ({
     setInterimTranscript('');
     gotNativeResultRef.current = false;
 
-    // Request microphone permission if supported
     if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
       try {
         const stream = await navigator.mediaDevices.getUserMedia({
@@ -158,14 +196,14 @@ export const CreateDocumentModal: React.FC<CreateDocumentModalProps> = ({
           err?.name === 'PermissionDeniedError'
         ) {
           setMicError(
-            'Microphone permission was denied. Please allow microphone access in your browser settings, or use the live transcription mode below.'
+            'Microphone access blocked by browser; using live fallback transcription.'
           );
         }
       }
     }
 
     setIsRecording(true);
-    setRecordingMessage('Listening... Speak your instructions.');
+    setRecordingMessage('Recording active — speak your instructions...');
 
     const SpeechRecognition =
       (window as any).SpeechRecognition ||
@@ -200,22 +238,17 @@ export const CreateDocumentModal: React.FC<CreateDocumentModalProps> = ({
           setInterimTranscript(interimChunk);
         };
 
-        recognition.onerror = (event: any) => {
-          if (event?.error === 'not-allowed') {
-            setMicError(
-              'Microphone permission denied. Streaming fallback transcription...'
-            );
-          }
+        recognition.onerror = () => {
+          // Fallback handles it
         };
 
         recognitionRef.current = recognition;
         recognition.start();
       } catch {
-        // Fallback stream below will handle live word-by-word transcription
+        // Fallback handles it
       }
     }
 
-    // Start live word-by-word fallback stream after 1.2s if native speech hasn't emitted words yet
     window.setTimeout(() => {
       if (!gotNativeResultRef.current && recognitionRef.current !== undefined) {
         startFallbackLiveWordStream();
@@ -266,6 +299,20 @@ export const CreateDocumentModal: React.FC<CreateDocumentModalProps> = ({
     e.target.value = '';
   };
 
+  const handleLoadComputerDocForWorkflow = async () => {
+    const loaded = await openDocumentFromComputerFile(category);
+    if (loaded) {
+      setImportedComputerDoc(loaded.doc);
+      setSelectedExistingDocId(loaded.doc.id);
+    }
+  };
+
+  const selectedExistingDoc =
+    importedComputerDoc?.id === selectedExistingDocId
+      ? importedComputerDoc
+      : existingDocuments.find((d) => d.id === selectedExistingDocId) ||
+        existingDocuments[0];
+
   const handleGenerate = () => {
     if (isRecording) {
       stopVoiceRecording();
@@ -276,20 +323,54 @@ export const CreateDocumentModal: React.FC<CreateDocumentModalProps> = ({
     const effectivePrompt =
       combinedPrompt ||
       (uploadedFiles.length > 0
-        ? `Generate a ${category} based on uploaded reference file: ${uploadedFiles[0].name}`
+        ? `Incorporate reference material from ${uploadedFiles[0].name}`
         : '');
 
     if (!effectivePrompt) return;
 
     setIsGenerating(true);
     setTimeout(() => {
-      const now = new Date();
-      const timestamp = `${now.getFullYear()}-${String(
-        now.getMonth() + 1
-      ).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')} ${String(
-        now.getHours()
-      ).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+      const todayFormatted = getCurrentFormattedDate();
 
+      // Option B: Continue with an Existing Document (Requirement 15 & 17)
+      if (workflowMode === 'existing' && selectedExistingDoc) {
+        const updatedResult = modifyExistingDocumentWithAI(
+          selectedExistingDoc,
+          effectivePrompt,
+          uploadedFiles
+        );
+
+        if (preserveMode === 'overwrite' && !importedComputerDoc) {
+          const updatedExisting: DocumentItem = {
+            ...selectedExistingDoc,
+            content: updatedResult.content,
+            updatedAt: todayFormatted,
+            syncStatus: isOnline ? 'saved' : 'offline-pending',
+          };
+          setIsGenerating(false);
+          onDocumentCreated(updatedExisting, true);
+          return;
+        } else {
+          const workingCopy: DocumentItem = {
+            ...selectedExistingDoc,
+            id: `doc-${Date.now()}`,
+            title: importedComputerDoc
+              ? selectedExistingDoc.title
+              : `${selectedExistingDoc.title} (AI Updated)`,
+            category,
+            content: updatedResult.content,
+            createdAt: todayFormatted,
+            updatedAt: todayFormatted,
+            status: 'Draft',
+            syncStatus: isOnline ? 'saved' : 'offline-pending',
+          };
+          setIsGenerating(false);
+          onDocumentCreated(workingCopy, false);
+          return;
+        }
+      }
+
+      // Option A: Create a New Document
       const generated = generateDocumentFromNaturalPrompt(
         category,
         effectivePrompt,
@@ -310,8 +391,8 @@ export const CreateDocumentModal: React.FC<CreateDocumentModalProps> = ({
         title: generated.title,
         category,
         content: generated.content,
-        createdAt: timestamp,
-        updatedAt: timestamp,
+        createdAt: todayFormatted,
+        updatedAt: todayFormatted,
         status: 'Draft',
         syncStatus: isOnline ? 'saved' : 'offline-pending',
         format: 'DOCX',
@@ -320,13 +401,13 @@ export const CreateDocumentModal: React.FC<CreateDocumentModalProps> = ({
       };
 
       setIsGenerating(false);
-      onDocumentCreated(newDoc);
-    }, 420);
+      onDocumentCreated(newDoc, false);
+    }, 380);
   };
 
   return (
     <div className="nc-modal-backdrop">
-      <div className="nc-modal-dialog">
+      <div className="nc-modal-dialog" style={{ maxWidth: '680px' }}>
         {/* Modal Header */}
         <div
           style={{
@@ -415,7 +496,7 @@ export const CreateDocumentModal: React.FC<CreateDocumentModalProps> = ({
         {/* Modal Body */}
         <div
           style={{
-            padding: '22px',
+            padding: '20px 22px',
             overflowY: 'auto',
             flex: 1,
             display: 'flex',
@@ -423,114 +504,427 @@ export const CreateDocumentModal: React.FC<CreateDocumentModalProps> = ({
             gap: '16px',
           }}
         >
-          {/* Main Natural-Language Instruction Textarea */}
-          <div>
-            <textarea
-              rows={6}
-              value={
-                interimTranscript
-                  ? `${prompt}${prompt ? ' ' : ''}${interimTranscript}`
-                  : prompt
-              }
-              onChange={(e) => {
-                setInterimTranscript('');
-                setPrompt(e.target.value);
-              }}
-              placeholder={copy.placeholder}
-              className="ed-textarea"
+          {/* Requirement 15 & 17: Option A (Create New) vs Option B (Continue with Existing Document) */}
+          <div
+            style={{
+              display: 'grid',
+              gridTemplateColumns: '1fr 1fr',
+              border: '1px solid var(--border-stone)',
+              backgroundColor: 'var(--bg-stone)',
+              padding: '3px',
+              gap: '4px',
+            }}
+          >
+            <button
+              type="button"
+              onClick={() => setWorkflowMode('new')}
               style={{
-                fontSize: '14.5px',
-                lineHeight: 1.55,
-                padding: '13px',
-                resize: 'vertical',
-                borderColor: isRecording
-                  ? 'var(--accent-terracotta)'
-                  : undefined,
+                padding: '9px 12px',
+                border: 'none',
+                backgroundColor:
+                  workflowMode === 'new' ? 'var(--bg-ivory)' : 'transparent',
+                color:
+                  workflowMode === 'new'
+                    ? 'var(--accent-blue)'
+                    : 'var(--ink-muted)',
+                fontWeight: workflowMode === 'new' ? 700 : 500,
+                fontSize: '12.5px',
+                cursor: 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: '7px',
+                boxShadow:
+                  workflowMode === 'new'
+                    ? '0 1px 4px rgba(10, 25, 78, 0.08)'
+                    : 'none',
               }}
-              autoFocus
-            />
+            >
+              <FilePlus size={14} />
+              <span>Create a New Document</span>
+            </button>
 
-            {/* Live Voice Recording Indicator Bar (Section 5) */}
-            {isRecording && (
+            <button
+              type="button"
+              onClick={() => setWorkflowMode('existing')}
+              style={{
+                padding: '9px 12px',
+                border: 'none',
+                backgroundColor:
+                  workflowMode === 'existing'
+                    ? 'var(--bg-ivory)'
+                    : 'transparent',
+                color:
+                  workflowMode === 'existing'
+                    ? 'var(--accent-blue)'
+                    : 'var(--ink-muted)',
+                fontWeight: workflowMode === 'existing' ? 700 : 500,
+                fontSize: '12.5px',
+                cursor: 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: '7px',
+                boxShadow:
+                  workflowMode === 'existing'
+                    ? '0 1px 4px rgba(10, 25, 78, 0.08)'
+                    : 'none',
+              }}
+            >
+              <FolderOpen size={14} />
+              <span>Continue with Existing Document</span>
+            </button>
+          </div>
+
+          {/* Option B: Select Existing Document from Library or Computer (Requirement 15 & 17) */}
+          {workflowMode === 'existing' && (
+            <div
+              style={{
+                padding: '14px',
+                backgroundColor: 'var(--bg-stone)',
+                border: '1px solid var(--border-ivory)',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: '10px',
+              }}
+            >
               <div
                 style={{
-                  marginTop: '8px',
-                  padding: '10px 14px',
-                  backgroundColor: 'rgba(217, 78, 52, 0.08)',
-                  border: '1px solid var(--accent-terracotta)',
                   display: 'flex',
                   alignItems: 'center',
                   justifyContent: 'space-between',
-                  gap: '12px',
+                  gap: '8px',
                   flexWrap: 'wrap',
                 }}
               >
+                <label className="ed-field-label" style={{ marginBottom: 0 }}>
+                  Select Existing Document from Library
+                </label>
+
+                <button
+                  type="button"
+                  onClick={handleLoadComputerDocForWorkflow}
+                  className="btn-ed-subtle"
+                  style={{
+                    backgroundColor: 'var(--bg-ivory)',
+                    padding: '4px 9px',
+                    fontSize: '9.5px',
+                  }}
+                >
+                  <HardDriveUpload size={11} color="var(--accent-blue)" />
+                  <span>Browse File from Computer</span>
+                </button>
+              </div>
+
+              <select
+                value={selectedExistingDocId}
+                onChange={(e) => setSelectedExistingDocId(e.target.value)}
+                className="ed-select"
+              >
+                {importedComputerDoc && (
+                  <option value={importedComputerDoc.id}>
+                    [Computer File] {importedComputerDoc.title}
+                  </option>
+                )}
+                {existingDocuments.map((doc) => (
+                  <option key={doc.id} value={doc.id}>
+                    [{doc.category.toUpperCase()}] {doc.title} — (Modified{' '}
+                    {formatDisplayDate(doc.updatedAt)})
+                  </option>
+                ))}
+              </select>
+
+              {selectedExistingDoc && (
                 <div
                   style={{
                     display: 'flex',
                     alignItems: 'center',
-                    gap: '10px',
+                    justifyContent: 'space-between',
+                    flexWrap: 'wrap',
+                    gap: '8px',
+                    paddingTop: '4px',
+                    fontSize: '12px',
+                    color: 'var(--ink-muted)',
                   }}
                 >
-                  {/* Animated Waveform Bars */}
-                  <div
-                    style={{
-                      display: 'inline-flex',
-                      alignItems: 'center',
-                      gap: '3px',
-                      height: '16px',
-                    }}
-                  >
-                    <span
-                      className="voice-bar"
-                      style={{ animationDelay: '0s' }}
-                    />
-                    <span
-                      className="voice-bar"
-                      style={{ animationDelay: '0.15s' }}
-                    />
-                    <span
-                      className="voice-bar"
-                      style={{ animationDelay: '0.3s' }}
-                    />
-                    <span
-                      className="voice-bar"
-                      style={{ animationDelay: '0.1s' }}
-                    />
-                    <span
-                      className="voice-bar"
-                      style={{ animationDelay: '0.25s' }}
-                    />
-                  </div>
-                  <span
-                    style={{
-                      fontSize: '12.5px',
-                      fontWeight: 600,
-                      color: 'var(--accent-terracotta)',
-                    }}
-                  >
-                    {recordingMessage || 'Listening... Speak your instructions.'}
+                  <span>
+                    Loaded: <strong>{selectedExistingDoc.title}</strong>
                   </span>
+
+                  <div style={{ display: 'flex', gap: '6px' }}>
+                    <button
+                      type="button"
+                      onClick={() => setPreserveMode('copy')}
+                      className={
+                        preserveMode === 'copy'
+                          ? 'btn-ed-primary'
+                          : 'btn-ed-subtle'
+                      }
+                      style={{ padding: '4px 8px', fontSize: '9px' }}
+                    >
+                      Save as Working Copy (Safe)
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setPreserveMode('overwrite')}
+                      className={
+                        preserveMode === 'overwrite'
+                          ? 'btn-ed-primary'
+                          : 'btn-ed-subtle'
+                      }
+                      style={{ padding: '4px 8px', fontSize: '9px' }}
+                    >
+                      Update Original Document
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Requirement 16: Unified AI Input Box with Voice Icon, Upload Icon & Submit Button INSIDE Bottom-Right */}
+          <div>
+            <div
+              style={{
+                border: isRecording
+                  ? '2px solid #16A34A'
+                  : '1px solid var(--border-stone)',
+                backgroundColor: isRecording
+                  ? 'rgba(22, 163, 74, 0.04)'
+                  : 'var(--bg-ivory)',
+                boxShadow: isRecording
+                  ? '0 0 0 3px rgba(22, 163, 74, 0.14)'
+                  : 'none',
+                transition:
+                  'border-color 0.15s ease, box-shadow 0.15s ease, background-color 0.15s ease',
+                display: 'flex',
+                flexDirection: 'column',
+              }}
+            >
+              {/* Auto-expanding Textarea */}
+              <textarea
+                ref={textareaRef}
+                rows={4}
+                value={combinedInputText}
+                onChange={(e) => {
+                  setInterimTranscript('');
+                  setPrompt(e.target.value);
+                }}
+                placeholder={
+                  workflowMode === 'existing'
+                    ? 'Describe what you want AI to update, expand, restructure or add to the selected document...'
+                    : copy.placeholder
+                }
+                style={{
+                  width: '100%',
+                  border: 'none',
+                  backgroundColor: 'transparent',
+                  color: 'var(--ink-navy)',
+                  fontSize: '14.5px',
+                  lineHeight: 1.55,
+                  padding: '14px 14px 8px 14px',
+                  outline: 'none',
+                  resize: 'none',
+                  overflowY: 'auto',
+                }}
+                autoFocus
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+                    e.preventDefault();
+                    handleGenerate();
+                  }
+                }}
+              />
+
+              {/* Attached Files Displayed Inside the Input Area (Requirement 16) */}
+              {uploadedFiles.length > 0 && (
+                <div
+                  style={{
+                    padding: '6px 14px',
+                    display: 'flex',
+                    flexWrap: 'wrap',
+                    gap: '6px',
+                  }}
+                >
+                  {uploadedFiles.map((file, idx) => (
+                    <div
+                      key={idx}
+                      style={{
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: '6px',
+                        padding: '4px 9px',
+                        backgroundColor: 'var(--bg-stone)',
+                        border: '1px solid var(--border-stone)',
+                        fontSize: '11.5px',
+                        color: 'var(--ink-navy)',
+                      }}
+                    >
+                      <FileText size={12} color="var(--accent-blue)" />
+                      <span>{file.name}</span>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setUploadedFiles((prev) =>
+                            prev.filter((_, i) => i !== idx)
+                          )
+                        }
+                        style={{
+                          background: 'none',
+                          border: 'none',
+                          cursor: 'pointer',
+                          color: 'var(--ink-muted)',
+                          display: 'flex',
+                          padding: '1px',
+                        }}
+                        title="Remove attachment"
+                      >
+                        <X size={12} />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {/* Bottom Controls Row INSIDE the Input Field Container (Requirement 16) */}
+              <div
+                style={{
+                  padding: '8px 10px 10px 14px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  gap: '10px',
+                  flexWrap: 'wrap',
+                  borderTop: '1px solid var(--border-ivory)',
+                }}
+              >
+                {/* Left Status / Recording Feedback inside input bar */}
+                <div
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '8px',
+                    fontSize: '11.5px',
+                    color: isRecording ? '#15803D' : 'var(--ink-muted)',
+                    fontWeight: isRecording ? 600 : 400,
+                  }}
+                >
+                  {isRecording ? (
+                    <>
+                      <span
+                        style={{
+                          width: '8px',
+                          height: '8px',
+                          borderRadius: '50%',
+                          backgroundColor: '#16A34A',
+                          display: 'inline-block',
+                        }}
+                      />
+                      <span>
+                        {recordingMessage ||
+                          'Listening... Speak into your microphone.'}
+                      </span>
+                    </>
+                  ) : (
+                    <span>
+                      {recordingMessage ||
+                        'Type instructions, speak via microphone, or attach reference files.'}
+                    </span>
+                  )}
                 </div>
 
-                <button
-                  type="button"
-                  onClick={stopVoiceRecording}
-                  className="btn-ed-primary"
+                {/* Right Icons: Voice Input Icon, File Upload Icon, and Submit Button */}
+                <div
                   style={{
-                    backgroundColor: 'var(--accent-terracotta)',
-                    borderColor: 'var(--accent-terracotta)',
-                    padding: '5px 11px',
-                    fontSize: '10px',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '6px',
+                    marginLeft: 'auto',
                   }}
                 >
-                  <Square size={11} />
-                  <span>Stop Recording</span>
-                </button>
-              </div>
-            )}
+                  {/* Voice Input Icon Button */}
+                  <button
+                    type="button"
+                    onClick={handleToggleVoice}
+                    title={
+                      isRecording
+                        ? 'Stop Voice Recording'
+                        : 'Start Voice-to-Text Input'
+                    }
+                    style={{
+                      width: '34px',
+                      height: '34px',
+                      border: isRecording
+                        ? '1px solid #16A34A'
+                        : '1px solid var(--border-stone)',
+                      backgroundColor: isRecording
+                        ? '#16A34A'
+                        : 'var(--bg-stone)',
+                      color: isRecording ? '#FFFFFF' : 'var(--ink-navy)',
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    {isRecording ? <Square size={13} /> : <Mic size={14} />}
+                  </button>
 
-            {/* Permission / Microphone Notice */}
+                  {/* File/Document Upload Icon Button */}
+                  <label
+                    title="Attach Reference Document or Image"
+                    style={{
+                      width: '34px',
+                      height: '34px',
+                      border: '1px solid var(--border-stone)',
+                      backgroundColor: 'var(--bg-stone)',
+                      color: 'var(--ink-navy)',
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    <Paperclip size={14} />
+                    <input
+                      type="file"
+                      multiple
+                      accept="image/*,.pdf,.doc,.docx,.txt,.md,.ncdoc,.json"
+                      onChange={handleFileUpload}
+                      style={{ display: 'none' }}
+                    />
+                  </label>
+
+                  {/* Submit Button */}
+                  <button
+                    type="button"
+                    onClick={handleGenerate}
+                    disabled={
+                      isGenerating ||
+                      (!prompt.trim() &&
+                        !interimTranscript.trim() &&
+                        uploadedFiles.length === 0)
+                    }
+                    className="btn-ed-primary"
+                    style={{
+                      height: '34px',
+                      padding: '0 14px',
+                      fontSize: '10px',
+                    }}
+                  >
+                    <Send size={12} />
+                    <span>
+                      {isGenerating
+                        ? 'Processing...'
+                        : workflowMode === 'existing'
+                        ? 'Update Document'
+                        : 'Generate'}
+                    </span>
+                  </button>
+                </div>
+              </div>
+            </div>
+
             {micError && (
               <div
                 style={{
@@ -549,292 +943,151 @@ export const CreateDocumentModal: React.FC<CreateDocumentModalProps> = ({
                 <span>{micError}</span>
               </div>
             )}
-
-            {/* Voice & Upload Input Actions Bar */}
-            <div
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'space-between',
-                flexWrap: 'wrap',
-                gap: '10px',
-                marginTop: '10px',
-              }}
-            >
-              <div
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '8px',
-                  flexWrap: 'wrap',
-                }}
-              >
-                {/* Voice Input Action */}
-                <button
-                  type="button"
-                  onClick={handleToggleVoice}
-                  className={isRecording ? 'btn-ed-primary' : 'btn-ed-subtle'}
-                  style={{
-                    backgroundColor: isRecording
-                      ? 'var(--accent-terracotta)'
-                      : undefined,
-                    borderColor: isRecording
-                      ? 'var(--accent-terracotta)'
-                      : undefined,
-                  }}
-                >
-                  {isRecording ? <Square size={12} /> : <Mic size={13} />}
-                  <span>{isRecording ? 'Stop Recording' : 'Voice Input'}</span>
-                </button>
-
-                {/* Upload Reference Image / File Action */}
-                <label className="btn-ed-subtle" style={{ cursor: 'pointer' }}>
-                  <Upload size={13} />
-                  <span>Upload Image / File</span>
-                  <input
-                    type="file"
-                    multiple
-                    accept="image/*,.pdf,.doc,.docx,.txt"
-                    onChange={handleFileUpload}
-                    style={{ display: 'none' }}
-                  />
-                </label>
-              </div>
-
-              {!isRecording && recordingMessage && (
-                <span
-                  style={{
-                    fontSize: '11.5px',
-                    color: 'var(--ink-muted)',
-                  }}
-                >
-                  {recordingMessage}
-                </span>
-              )}
-            </div>
           </div>
 
-          {/* Uploaded Reference Files List */}
-          {uploadedFiles.length > 0 && (
+          {/* Expandable Optional Information Section (Only for new documents) */}
+          {workflowMode === 'new' && (
             <div
               style={{
-                display: 'flex',
-                flexDirection: 'column',
-                gap: '6px',
+                borderTop: '1px solid var(--border-ivory)',
+                paddingTop: '12px',
               }}
             >
-              <div className="ed-field-label">
-                Uploaded Reference Materials ({uploadedFiles.length})
-              </div>
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
-                {uploadedFiles.map((file, idx) => (
-                  <div
-                    key={idx}
-                    style={{
-                      display: 'inline-flex',
-                      alignItems: 'center',
-                      gap: '8px',
-                      padding: '5px 10px',
-                      backgroundColor: 'var(--bg-stone)',
-                      border: '1px solid var(--border-ivory)',
-                      fontSize: '12px',
-                    }}
-                  >
-                    <FileText size={12} color="var(--accent-blue)" />
-                    <span>{file.name}</span>
-                    <button
-                      type="button"
-                      onClick={() =>
-                        setUploadedFiles((prev) =>
-                          prev.filter((_, i) => i !== idx)
-                        )
-                      }
-                      style={{
-                        background: 'none',
-                        border: 'none',
-                        cursor: 'pointer',
-                        color: 'var(--ink-muted)',
-                        display: 'flex',
-                      }}
-                      title="Remove attachment"
-                    >
-                      <Trash2 size={12} />
-                    </button>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {/* Expandable Optional Information Section */}
-          <div
-            style={{
-              borderTop: '1px solid var(--border-ivory)',
-              paddingTop: '12px',
-            }}
-          >
-            <button
-              type="button"
-              onClick={() => setShowOptional((prev) => !prev)}
-              style={{
-                background: 'none',
-                border: 'none',
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: '6px',
-                fontFamily: 'var(--font-mono)',
-                fontSize: '10px',
-                textTransform: 'uppercase',
-                letterSpacing: '0.09em',
-                color: 'var(--ink-muted)',
-                cursor: 'pointer',
-              }}
-            >
-              <span>Additional Details (Optional)</span>
-              {showOptional ? (
-                <ChevronUp size={13} />
-              ) : (
-                <ChevronDown size={13} />
-              )}
-            </button>
-
-            {showOptional && (
-              <div
+              <button
+                type="button"
+                onClick={() => setShowOptional((prev) => !prev)}
                 style={{
-                  display: 'grid',
-                  gridTemplateColumns: 'repeat(auto-fit, minmax(190px, 1fr))',
-                  gap: '12px',
-                  marginTop: '12px',
-                  padding: '14px',
-                  backgroundColor: 'var(--bg-stone)',
-                  border: '1px solid var(--border-ivory)',
+                  background: 'none',
+                  border: 'none',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '6px',
+                  fontFamily: 'var(--font-mono)',
+                  fontSize: '10px',
+                  textTransform: 'uppercase',
+                  letterSpacing: '0.09em',
+                  color: 'var(--ink-muted)',
+                  cursor: 'pointer',
                 }}
               >
-                <div>
-                  <label className="ed-field-label">Institution</label>
-                  <input
-                    type="text"
-                    value={institution}
-                    onChange={(e) => setInstitution(e.target.value)}
-                    placeholder="e.g. University of Lagos"
-                    className="ed-input"
-                  />
-                </div>
+                <span>Additional Academic Details (Optional)</span>
+                {showOptional ? (
+                  <ChevronUp size={13} />
+                ) : (
+                  <ChevronDown size={13} />
+                )}
+              </button>
 
-                <div>
-                  <label className="ed-field-label">Department</label>
-                  <input
-                    type="text"
-                    value={department}
-                    onChange={(e) => setDepartment(e.target.value)}
-                    placeholder="e.g. Economics"
-                    className="ed-input"
-                  />
-                </div>
-
-                {category !== 'cv' && (
+              {showOptional && (
+                <div
+                  style={{
+                    display: 'grid',
+                    gridTemplateColumns: 'repeat(auto-fit, minmax(190px, 1fr))',
+                    gap: '12px',
+                    marginTop: '12px',
+                    padding: '14px',
+                    backgroundColor: 'var(--bg-stone)',
+                    border: '1px solid var(--border-ivory)',
+                  }}
+                >
                   <div>
-                    <label className="ed-field-label">Course Code</label>
+                    <label className="ed-field-label">Institution</label>
                     <input
                       type="text"
-                      value={courseCode}
-                      onChange={(e) => setCourseCode(e.target.value)}
-                      placeholder="e.g. ECN 312"
+                      value={institution}
+                      onChange={(e) => setInstitution(e.target.value)}
+                      placeholder="e.g. University of Lagos"
                       className="ed-input"
                     />
                   </div>
-                )}
 
-                <div>
-                  <label className="ed-field-label">
-                    {category === 'cv' ? 'Full Name' : 'Student Name'}
-                  </label>
-                  <input
-                    type="text"
-                    value={studentName}
-                    onChange={(e) => setStudentName(e.target.value)}
-                    placeholder="Optional"
-                    className="ed-input"
-                  />
+                  <div>
+                    <label className="ed-field-label">Department</label>
+                    <input
+                      type="text"
+                      value={department}
+                      onChange={(e) => setDepartment(e.target.value)}
+                      placeholder="e.g. Economics"
+                      className="ed-input"
+                    />
+                  </div>
+
+                  {category !== 'cv' && (
+                    <div>
+                      <label className="ed-field-label">Course Code</label>
+                      <input
+                        type="text"
+                        value={courseCode}
+                        onChange={(e) => setCourseCode(e.target.value)}
+                        placeholder="e.g. ECN 312"
+                        className="ed-input"
+                      />
+                    </div>
+                  )}
+
+                  <div>
+                    <label className="ed-field-label">
+                      {category === 'cv' ? 'Full Name' : 'Student Name'}
+                    </label>
+                    <input
+                      type="text"
+                      value={studentName}
+                      onChange={(e) => setStudentName(e.target.value)}
+                      placeholder="Optional"
+                      className="ed-input"
+                    />
+                  </div>
+
+                  {category !== 'cv' && (
+                    <>
+                      <div>
+                        <label className="ed-field-label">
+                          Lecturer / Supervisor
+                        </label>
+                        <input
+                          type="text"
+                          value={lecturer}
+                          onChange={(e) => setLecturer(e.target.value)}
+                          placeholder="Optional"
+                          className="ed-input"
+                        />
+                      </div>
+
+                      <div>
+                        <label className="ed-field-label">
+                          Referencing Style
+                        </label>
+                        <select
+                          value={referencingStyle}
+                          onChange={(e) => setReferencingStyle(e.target.value)}
+                          className="ed-select"
+                        >
+                          <option>APA 7th Edition</option>
+                          <option>Harvard</option>
+                          <option>IEEE</option>
+                          <option>MLA 9th Edition</option>
+                          <option>Chicago</option>
+                        </select>
+                      </div>
+
+                      <div>
+                        <label className="ed-field-label">
+                          Required Word Count
+                        </label>
+                        <input
+                          type="text"
+                          value={wordCount}
+                          onChange={(e) => setWordCount(e.target.value)}
+                          placeholder="e.g. 1,500 words"
+                          className="ed-input"
+                        />
+                      </div>
+                    </>
+                  )}
                 </div>
-
-                {category !== 'cv' && (
-                  <>
-                    <div>
-                      <label className="ed-field-label">
-                        Lecturer / Supervisor
-                      </label>
-                      <input
-                        type="text"
-                        value={lecturer}
-                        onChange={(e) => setLecturer(e.target.value)}
-                        placeholder="Optional"
-                        className="ed-input"
-                      />
-                    </div>
-
-                    <div>
-                      <label className="ed-field-label">Referencing Style</label>
-                      <select
-                        value={referencingStyle}
-                        onChange={(e) => setReferencingStyle(e.target.value)}
-                        className="ed-select"
-                      >
-                        <option>APA 7th Edition</option>
-                        <option>Harvard</option>
-                        <option>IEEE</option>
-                        <option>MLA 9th Edition</option>
-                        <option>Chicago</option>
-                      </select>
-                    </div>
-
-                    <div>
-                      <label className="ed-field-label">
-                        Required Word Count
-                      </label>
-                      <input
-                        type="text"
-                        value={wordCount}
-                        onChange={(e) => setWordCount(e.target.value)}
-                        placeholder="e.g. 1,500 words"
-                        className="ed-input"
-                      />
-                    </div>
-                  </>
-                )}
-              </div>
-            )}
-          </div>
-        </div>
-
-        {/* Modal Footer */}
-        <div
-          style={{
-            padding: '14px 22px',
-            borderTop: '1px solid var(--border-ivory)',
-            backgroundColor: 'var(--bg-stone)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'flex-end',
-            gap: '10px',
-          }}
-        >
-          <button onClick={onClose} className="btn-ed-subtle">
-            Cancel
-          </button>
-          <button
-            onClick={handleGenerate}
-            disabled={
-              isGenerating ||
-              (!prompt.trim() &&
-                !interimTranscript.trim() &&
-                uploadedFiles.length === 0)
-            }
-            className="btn-ed-primary"
-          >
-            <Sparkles size={13} />
-            <span>{isGenerating ? 'Generating...' : 'Generate Document'}</span>
-          </button>
+              )}
+            </div>
+          )}
         </div>
       </div>
     </div>

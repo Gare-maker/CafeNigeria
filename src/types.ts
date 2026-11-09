@@ -23,6 +23,8 @@ export interface AIMessage {
   inserted?: boolean;
   targetGroupId?: string;
   targetGroupName?: string;
+  targetPageIndex?: number;
+  attachments?: string[];
 }
 
 export interface PageLayoutSettings {
@@ -47,13 +49,15 @@ export interface PageLayoutSettings {
 }
 
 export type ShapeType =
+  | 'rect'
+  | 'square'
+  | 'ellipse'
+  | 'triangle'
+  | 'diamond'
   | 'line'
   | 'hline'
   | 'vline'
   | 'arrow'
-  | 'rect'
-  | 'square'
-  | 'ellipse'
   | 'freehand';
 
 export interface DrawingElement {
@@ -66,8 +70,23 @@ export interface DrawingElement {
   y2: number;
   points?: { x: number; y: number }[];
   strokeColor: string;
+  fillColor?: string;
   strokeWidth: number;
   lineStyle: 'solid' | 'dashed' | 'dotted';
+  zIndex?: number;
+}
+
+export interface CanvasImageElement {
+  id: string;
+  pageIndex: number;
+  src: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  aspectRatio: number;
+  zIndex: number;
+  caption?: string;
 }
 
 export interface PageGroup {
@@ -109,7 +128,9 @@ export interface DocumentItem {
     fontFamily?: string;
     layout?: PageLayoutSettings;
     drawings?: DrawingElement[];
+    images?: CanvasImageElement[];
     pageGroups?: PageGroup[];
+    localFileName?: string;
   };
   aiHistory: AIMessage[];
 }

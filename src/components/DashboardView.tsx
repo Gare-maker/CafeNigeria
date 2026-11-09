@@ -6,15 +6,21 @@ import {
   UserCheck,
   ScanText,
   ArrowRight,
+  HardDriveUpload,
 } from 'lucide-react';
 import { DocumentCategory, DocumentItem } from '../types';
-import { CATEGORIES } from '../services/aiGenerator';
+import {
+  CATEGORIES,
+  formatDisplayDate,
+  searchDocumentMatch,
+} from '../services/aiGenerator';
 
 interface DashboardViewProps {
   documents: DocumentItem[];
   searchQuery: string;
   onSelectCategory: (category: DocumentCategory) => void;
   onOpenDocument: (docId: string) => void;
+  onOpenComputerFile?: () => void;
 }
 
 const CATEGORY_ICONS: Record<DocumentCategory, React.ReactNode> = {
@@ -38,18 +44,19 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   searchQuery,
   onSelectCategory,
   onOpenDocument,
+  onOpenComputerFile,
 }) => {
   const getCategoryCount = (catId: DocumentCategory) =>
     documents.filter((d) => d.category === catId).length;
 
-  const trimmedSearch = searchQuery.trim().toLowerCase();
-  const matchingDocs = trimmedSearch
-    ? documents.filter(
-        (d) =>
-          d.title.toLowerCase().includes(trimmedSearch) ||
-          d.category.toLowerCase().includes(trimmedSearch) ||
-          (d.metadata.institution || '').toLowerCase().includes(trimmedSearch)
-      )
+  const trimmedSearch = searchQuery.trim();
+  const matchingResults = trimmedSearch
+    ? documents
+        .map((doc) => ({
+          doc,
+          match: searchDocumentMatch(doc, trimmedSearch),
+        }))
+        .filter((item) => item.match.matched)
     : [];
 
   return (
@@ -63,33 +70,56 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
     >
       <div className="nc-container">
         {/* Introductory Section */}
-        <div style={{ maxWidth: '600px', marginBottom: '36px' }}>
-          <h1 className="display-heading">
-            Create documents with AI, faster than ever.
-          </h1>
-          <p
-            style={{
-              marginTop: '10px',
-              fontSize: '15px',
-              color: 'var(--ink-muted)',
-              lineHeight: 1.5,
-            }}
-          >
-            Generate assignments, projects, seminar papers, CVs and organised
-            notes in one workspace.
-          </p>
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'flex-end',
+            justifyContent: 'space-between',
+            flexWrap: 'wrap',
+            gap: '16px',
+            marginBottom: '36px',
+          }}
+        >
+          <div style={{ maxWidth: '600px' }}>
+            <h1 className="display-heading">
+              Create documents with AI, faster than ever.
+            </h1>
+            <p
+              style={{
+                marginTop: '10px',
+                fontSize: '15px',
+                color: 'var(--ink-muted)',
+                lineHeight: 1.5,
+              }}
+            >
+              Generate assignments, projects, seminar papers, CVs and organised
+              notes in one workspace.
+            </p>
+          </div>
+
+          {onOpenComputerFile && (
+            <button
+              onClick={onOpenComputerFile}
+              className="btn-ed-outline"
+              style={{ height: '36px', padding: '0 14px', fontSize: '10px' }}
+              title="Open a saved document file from your computer"
+            >
+              <HardDriveUpload size={13} color="var(--accent-blue)" />
+              <span>Open File from Computer</span>
+            </button>
+          )}
         </div>
 
-        {/* Search Results (Only shown when actively searching from Header) */}
+        {/* Search Results (Searches titles, metadata, and full document content) */}
         {trimmedSearch && (
           <div style={{ marginBottom: '32px' }}>
             <div
               className="mono-label"
               style={{ color: 'var(--ink-muted)', marginBottom: '10px' }}
             >
-              Search Results ({matchingDocs.length})
+              Search Results across Titles &amp; Document Content ({matchingResults.length})
             </div>
-            {matchingDocs.length === 0 ? (
+            {matchingResults.length === 0 ? (
               <div
                 style={{
                   padding: '16px',
@@ -98,11 +128,11 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                   fontSize: '13.5px',
                 }}
               >
-                No documents match "{searchQuery}".
+                No documents or content match "{searchQuery}".
               </div>
             ) : (
               <div style={{ border: '1px solid var(--border-ivory)' }}>
-                {matchingDocs.map((doc, idx) => (
+                {matchingResults.map(({ doc, match }, idx) => (
                   <button
                     key={doc.id}
                     onClick={() => onOpenDocument(doc.id)}
@@ -113,7 +143,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                       backgroundColor: 'var(--bg-ivory)',
                       border: 'none',
                       borderBottom:
-                        idx < matchingDocs.length - 1
+                        idx < matchingResults.length - 1
                           ? '1px solid var(--border-ivory)'
                           : 'none',
                       display: 'flex',
@@ -123,29 +153,70 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                       cursor: 'pointer',
                     }}
                   >
-                    <div>
+                    <div style={{ minWidth: 0 }}>
                       <div
                         style={{
-                          fontWeight: 600,
-                          fontSize: '14px',
-                          color: 'var(--ink-navy)',
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '8px',
+                          flexWrap: 'wrap',
                         }}
                       >
-                        {doc.title}
+                        <span
+                          style={{
+                            fontWeight: 600,
+                            fontSize: '14px',
+                            color: 'var(--ink-navy)',
+                          }}
+                        >
+                          {doc.title}
+                        </span>
+                        {match.matchLocation && (
+                          <span
+                            className="mono-label"
+                            style={{
+                              fontSize: '9px',
+                              padding: '2px 6px',
+                              backgroundColor: 'var(--bg-stone)',
+                              border: '1px solid var(--border-stone)',
+                              color: 'var(--accent-blue)',
+                            }}
+                          >
+                            Matched in {match.matchLocation}
+                          </span>
+                        )}
                       </div>
+
+                      {match.snippet && (
+                        <div
+                          style={{
+                            fontSize: '12px',
+                            color: 'var(--ink-body)',
+                            marginTop: '4px',
+                            fontStyle: 'italic',
+                          }}
+                        >
+                          "{match.snippet}"
+                        </div>
+                      )}
+
                       <div
                         style={{
                           fontSize: '11.5px',
                           color: 'var(--ink-muted)',
-                          marginTop: '2px',
+                          marginTop: '3px',
                         }}
                       >
-                        Modified {doc.updatedAt}
+                        Modified {formatDisplayDate(doc.updatedAt)}
                       </div>
                     </div>
                     <span
                       className="mono-label"
-                      style={{ color: 'var(--accent-blue)', fontSize: '10px' }}
+                      style={{
+                        color: 'var(--accent-blue)',
+                        fontSize: '10px',
+                        flexShrink: 0,
+                      }}
                     >
                       Open →
                     </span>
@@ -156,7 +227,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
           </div>
         )}
 
-        {/* Compact, Balanced Category Cards Grid (Section 2) */}
+        {/* Compact, Balanced Category Cards Grid */}
         <div className="nc-category-grid">
           {CATEGORIES.map((cat) => {
             const count = getCategoryCount(cat.id);

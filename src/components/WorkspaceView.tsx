@@ -37,9 +37,16 @@ import {
   ArrowDown,
   ArrowLeft as ArrowLeftIcon,
   ArrowRight as ArrowRightIcon,
+  Mic,
+  Square,
+  Paperclip,
+  FileText,
+  HardDriveDownload,
+  HardDriveUpload,
 } from 'lucide-react';
 import {
   AIMessage,
+  CanvasImageElement,
   DocumentItem,
   DrawingElement,
   PageGroup,
@@ -47,7 +54,19 @@ import {
   ShapeType,
   SyncStatus,
 } from '../types';
-import { runWorkspaceAIPrompt } from '../services/aiGenerator';
+import {
+  getCurrentFormattedDate,
+  runPageLevelAI,
+  runTextLevelAI,
+  runWorkspaceAIPrompt,
+} from '../services/aiGenerator';
+import {
+  ElementLayerToolbar,
+  PageLevelAIPopover,
+  TextSelectionAIPopup,
+  useVoiceToText,
+} from './WorkspaceAIOverlays';
+import { PageLayoutModal } from './PageLayoutModal';
 
 interface WorkspaceViewProps {
   document: DocumentItem;
@@ -58,6 +77,8 @@ interface WorkspaceViewProps {
   onExportDocx: (doc: DocumentItem) => void;
   onExportPdf: (doc: DocumentItem) => void;
   onExportTxt: (doc: DocumentItem) => void;
+  onSaveToComputer?: (doc: DocumentItem) => void;
+  onOpenFromComputer?: () => void;
 }
 
 const DEFAULT_LAYOUT: PageLayoutSettings = {
@@ -92,6 +113,19 @@ const PAGE_DIMENSIONS_PX: Record<
   Legal: { w: 816, h: 1344 },
   Custom: { w: 794, h: 1122 },
 };
+
+const SHAPE_OPTIONS: { type: ShapeType; label: string }[] = [
+  { type: 'rect', label: 'Rectangle' },
+  { type: 'square', label: 'Square' },
+  { type: 'ellipse', label: 'Circle / Ellipse' },
+  { type: 'triangle', label: 'Triangle' },
+  { type: 'diamond', label: 'Diamond' },
+  { type: 'line', label: 'Line' },
+  { type: 'hline', label: 'Horizontal Line' },
+  { type: 'vline', label: 'Vertical Line' },
+  { type: 'arrow', label: 'Arrow' },
+  { type: 'freehand', label: 'Freehand Draw' },
+];
 
 function splitHtmlIntoInitialPages(html: string): string[] {
   const explicitParts = html
@@ -130,13 +164,6 @@ function splitHtmlIntoInitialPages(html: string): string[] {
   return finalPages.length > 0 ? finalPages : ['<p><br/></p>'];
 }
 
-function stripPersistentMarkers(html: string): string {
-  return html.replace(
-    /<mark[^>]*class=["']?ai-persistent-selection["']?[^>]*>([\s\S]*?)<\/mark>/gi,
-    '$1'
-  );
-}
-
 export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
   document: doc,
   isOnline,
@@ -146,12 +173,17 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
   onExportDocx,
   onExportPdf,
   onExportTxt,
+  onSaveToComputer,
+  onOpenFromComputer,
 }) => {
   const pageRefs = useRef<(HTMLDivElement | null)[]>([]);
   const activePageIdxRef = useRef<number>(0);
   const savedRangeRef = useRef<Range | null>(null);
   const exportMenuRef = useRef<HTMLDivElement>(null);
-  const tableMenuRef = useRef<HTMLDivElement>(null);
+  const tableBtnRef = useRef<HTMLButtonElement>(null);
+  const shapeBtnRef = useRef<HTMLButtonElement>(null);
+  const imageInputRef = useRef<HTMLInputElement>(null);
+  const aiTextareaRef = useRef<HTMLTextAreaElement>(null);
   const activeTableCellRef = useRef<HTMLTableCellElement | null>(null);
 
   const [title, setTitle] = useState(doc.title);
@@ -161,23 +193,85 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
   const [saveState, setSaveState] = useState<SyncStatus>(
     isOnline ? 'saved' : 'offline-pending'
   );
-  const [selectedText, setSelectedText] = useState('');
-  const [selectedPageIdx, setSelectedPageIdx] = useState<number>(0);
-  const [promptInput, setPromptInput] = useState('');
-  const [isAiLoading, setIsAiLoading] = useState(false);
   const [showExportMenu, setShowExportMenu] = useState(false);
   const [showAiPanel, setShowAiPanel] = useState<boolean>(() =>
     typeof window !== 'undefined' ? window.innerWidth > 1024 : true
   );
   const [lineSpacing, setLineSpacing] = useState('1.75');
 
-  // Section 7B: Table Popover & Contextual Table Editing State
-  const [showTablePicker, setShowTablePicker] = useState(false);
+  // Requirement 4: Separate Floating Text-Level AI Icon & Pop-up State (Never sent to Main AI Assistant)
+  const [highlightedText, setHighlightedText] = useState('');
+  const [highlightPageIdx, setHighlightPageIdx] = useState<number>(0);
+  const [highlightBadgePos, setHighlightBadgePos] = useState<{
+    top: number;
+    left: number;
+  } | null>(null);
+  const [showTextAiPopup, setShowTextAiPopup] = useState(false);
+
+  // Requirement 5: Dedicated Page-Level AI Editing State
+  const [activePageAiIdx, setActivePageAiIdx] = useState<number | null>(null);
+
+  // Requirement 6 & 7: Main AI Assistant Scope (Entire Document, Selected Group + Group Pages, or Individual Page) + File Uploads
+  const [mainAiScope, setMainAiScope] = useState<'document' | 'group' | 'page'>(
+    'document'
+  );
+  const [aiTargetGroupId, setAiTargetGroupId] = useState<string>('');
+  const [aiGroupPageSelection, setAiGroupPageSelection] = useState<
+    'all' | number
+  >('all');
+  const [aiTargetSinglePage, setAiTargetSinglePage] = useState<number>(0);
+  const [promptInput, setPromptInput] = useState('');
+  const [aiUploadedRefs, setAiUploadedRefs] = useState<
+    { name: string; extractedText: string }[]
+  >([]);
+  const [isAiLoading, setIsAiLoading] = useState(false);
+
+  // Requirement 8: Voice-to-Text in Main AI Assistant
+  const {
+    isRecording: isMainAiRecording,
+    interimText: mainAiInterim,
+    toggleRecording: toggleMainAiVoice,
+    stopRecording: stopMainAiVoice,
+  } = useVoiceToText(
+    setPromptInput,
+    'Update the selected section with a comparative analysis table and incorporate the key findings from the attached reference document.'
+  );
+
+  const combinedMainAiInput = mainAiInterim
+    ? `${promptInput}${promptInput ? ' ' : ''}${mainAiInterim}`
+    : promptInput;
+
+  // Requirement 9: Auto-expand Main AI Assistant input box vertically
+  useEffect(() => {
+    const el = aiTextareaRef.current;
+    if (!el) return;
+    el.style.height = 'auto';
+    el.style.height = `${Math.max(58, Math.min(el.scrollHeight, 185))}px`;
+  }, [combinedMainAiInput]);
+
+  // Requirement 13: Table Overlay Dropdown & Interactive Table Resizing State
+  const [tableMenuPos, setTableMenuPos] = useState<{
+    top: number;
+    left: number;
+  } | null>(null);
   const [newTableRows, setNewTableRows] = useState(3);
   const [newTableCols, setNewTableCols] = useState(3);
   const [isInsideTable, setIsInsideTable] = useState(false);
+  const [activeTableRect, setActiveTableRect] = useState<{
+    top: number;
+    left: number;
+    width: number;
+  } | null>(null);
+  const tableResizeDragRef = useRef<{
+    type: 'col' | 'row';
+    targetEl: HTMLElement;
+    startX: number;
+    startY: number;
+    origSize: number;
+    pageIdx: number;
+  } | null>(null);
 
-  // Section 9A: Page Layout State & Modal
+  // Requirement 9A: Page Layout State & Modal
   const [showLayoutModal, setShowLayoutModal] = useState(false);
   const [layout, setLayout] = useState<PageLayoutSettings>(
     () => doc.metadata.layout || DEFAULT_LAYOUT
@@ -186,31 +280,43 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
     'document'
   );
 
-  // Section 9B–D: Interactive Drawing & Shapes State
-  const [showDrawingBar, setShowDrawingBar] = useState(false);
+  // Requirement 10, 11, 12: Full-Page Shapes & Movable/Resizable Images with Layer Controls
+  const [shapeMenuPos, setShapeMenuPos] = useState<{
+    top: number;
+    left: number;
+  } | null>(null);
   const [activeShapeTool, setActiveShapeTool] = useState<ShapeType | 'select'>(
     'select'
   );
   const [strokeColor, setStrokeColor] = useState('#1447E6');
+  const [fillColor, setFillColor] = useState('transparent');
   const [strokeWidth, setStrokeWidth] = useState(2);
-  const [lineStyle, setLineStyle] = useState<'solid' | 'dashed' | 'dotted'>(
-    'solid'
-  );
+  const [lineStyle] = useState<'solid' | 'dashed' | 'dotted'>('solid');
   const [drawings, setDrawings] = useState<DrawingElement[]>(
     () => doc.metadata.drawings || []
   );
-  const [drawingUndoStack, setDrawingUndoStack] = useState<DrawingElement[][]>(
-    []
-  );
-  const [drawingRedoStack, setDrawingRedoStack] = useState<DrawingElement[][]>(
-    []
+  const [canvasImages, setCanvasImages] = useState<CanvasImageElement[]>(
+    () => doc.metadata.images || []
   );
   const [selectedDrawingId, setSelectedDrawingId] = useState<string | null>(
     null
   );
+  const [selectedImageId, setSelectedImageId] = useState<string | null>(null);
+
   const [dragState, setDragState] = useState<{
-    mode: 'create' | 'move' | 'resize-start' | 'resize-end';
-    drawingId: string;
+    targetKind: 'shape' | 'image';
+    mode:
+      | 'create'
+      | 'move'
+      | 'resize-nw'
+      | 'resize-ne'
+      | 'resize-sw'
+      | 'resize-se'
+      | 'resize-n'
+      | 'resize-s'
+      | 'resize-w'
+      | 'resize-e';
+    id: string;
     pageIdx: number;
     startX: number;
     startY: number;
@@ -218,9 +324,10 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
     origY1: number;
     origX2: number;
     origY2: number;
+    aspectRatio?: number;
   } | null>(null);
 
-  // Section 10 & 11: Page Grouping by Section State & AI Context
+  // Section 10: Page Grouping by Section State
   const [showGroupsSidebar, setShowGroupsSidebar] = useState(false);
   const [pageGroups, setPageGroups] = useState<PageGroup[]>(
     () => doc.metadata.pageGroups || []
@@ -231,7 +338,6 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
   const [newGroupName, setNewGroupName] = useState('');
   const [editingGroupId, setEditingGroupId] = useState<string | null>(null);
   const [editingGroupName, setEditingGroupName] = useState('');
-  const [aiTargetGroupId, setAiTargetGroupId] = useState<string>('');
 
   // Re-initialize when switching document
   useEffect(() => {
@@ -239,9 +345,12 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
     setPages(splitHtmlIntoInitialPages(doc.content));
     setLayout(doc.metadata.layout || DEFAULT_LAYOUT);
     setDrawings(doc.metadata.drawings || []);
+    setCanvasImages(doc.metadata.images || []);
     setPageGroups(doc.metadata.pageGroups || []);
-    setSelectedText('');
-    setAiTargetGroupId('');
+    setHighlightedText('');
+    setHighlightBadgePos(null);
+    setShowTextAiPopup(false);
+    setActivePageAiIdx(null);
     savedRangeRef.current = null;
   }, [doc.id]);
 
@@ -255,7 +364,7 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
     });
   }, [pages]);
 
-  // Close menus on outside click
+  // Close overlay dropdowns on outside click
   useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
       if (
@@ -264,36 +373,18 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
       ) {
         setShowExportMenu(false);
       }
-      if (
-        tableMenuRef.current &&
-        !tableMenuRef.current.contains(e.target as Node)
-      ) {
-        setShowTablePicker(false);
-      }
     };
     window.document.addEventListener('mousedown', handleClickOutside);
     return () =>
       window.document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
-  // Update sync state when online/offline changes
-  useEffect(() => {
-    if (!isOnline) {
-      setSaveState('offline-pending');
-    } else if (saveState === 'offline-pending') {
-      setSaveState('saving');
-      const t = setTimeout(() => setSaveState('saved'), 500);
-      return () => clearTimeout(t);
-    }
-  }, [isOnline]);
-
   const getCombinedCleanHtml = useCallback(
     (overridePages?: string[]) => {
       const targetPages = overridePages || pages;
       const currentHtmls = targetPages.map((p, idx) => {
         const el = pageRefs.current[idx];
-        const raw = overridePages ? p : el ? el.innerHTML : p || '';
-        return stripPersistentMarkers(raw);
+        return overridePages ? p : el ? el.innerHTML : p || '';
       });
       return currentHtmls.join('\n<hr class="page-break" />\n');
     },
@@ -308,6 +399,7 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
       overrideAiHistory?: AIMessage[];
       overrideLayout?: PageLayoutSettings;
       overrideDrawings?: DrawingElement[];
+      overrideImages?: CanvasImageElement[];
       overrideGroups?: PageGroup[];
     }) => {
       setSaveState('saving');
@@ -316,16 +408,11 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
           ? opts.overrideHtml
           : getCombinedCleanHtml();
 
-      const now = new Date();
-      const updatedAt = `${now.getFullYear()}-${String(
-        now.getMonth() + 1
-      ).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')} ${String(
-        now.getHours()
-      ).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
-
+      const updatedAt = getCurrentFormattedDate();
       const nextSync: SyncStatus = isOnline ? 'saved' : 'offline-pending';
       const nextLayout = opts?.overrideLayout || layout;
       const nextDrawings = opts?.overrideDrawings || drawings;
+      const nextImages = opts?.overrideImages || canvasImages;
       const nextGroups = opts?.overrideGroups || pageGroups;
 
       onUpdateDocument({
@@ -339,6 +426,7 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
           ...opts?.overrideMeta,
           layout: nextLayout,
           drawings: nextDrawings,
+          images: nextImages,
           pageGroups: nextGroups,
           orientation: nextLayout.orientation,
         },
@@ -347,9 +435,10 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
 
       setTimeout(() => {
         setSaveState(nextSync);
-      }, 300);
+      }, 260);
     },
     [
+      canvasImages,
       doc,
       drawings,
       getCombinedCleanHtml,
@@ -361,7 +450,6 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
     ]
   );
 
-  // Calculate page dimensions & max printable height based on current layout
   const getPageDimensions = (pageIdx: number) => {
     const base =
       layout.pageSize === 'Custom'
@@ -394,13 +482,9 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
       padLeftPx,
       padRightPx,
       maxBodyHeight,
-      pageOrient,
     };
   };
 
-  /**
-   * Automatic Multi-Page Content Flow (Section 5.2 & 9E)
-   */
   const checkAndFlowPages = useCallback(
     (pageIndex: number) => {
       const pageEl = pageRefs.current[pageIndex];
@@ -449,37 +533,29 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
     [layout, triggerAutoSave]
   );
 
-  const unwrapPersistentMarks = () => {
-    pageRefs.current.forEach((pageEl) => {
-      if (!pageEl) return;
-      const marks = pageEl.querySelectorAll('mark.ai-persistent-selection');
-      marks.forEach((mark) => {
-        const parent = mark.parentNode;
-        if (!parent) return;
-        while (mark.firstChild) {
-          parent.insertBefore(mark.firstChild, mark);
-        }
-        parent.removeChild(mark);
-      });
-    });
-  };
-
-  const handlePageSelection = (pageIdx: number, e?: React.SyntheticEvent) => {
+  // =========================================================================
+  // REQUIREMENT 4: TEXT-LEVEL SELECTION DETECTION (Floating AI Icon Only)
+  // =========================================================================
+  const handlePageSelection = (
+    pageIdx: number,
+    e?: React.MouseEvent | React.KeyboardEvent
+  ) => {
     activePageIdxRef.current = pageIdx;
 
-    // Detect if cursor is inside a table cell (Section 7B)
+    // Detect if cursor is inside a table cell (Requirement 13)
     const targetNode = (e?.target as HTMLElement) || null;
-    const cell =
-      targetNode?.closest?.('td, th') ||
-      (window.getSelection()?.anchorNode?.parentElement?.closest('td, th') as
-        | HTMLTableCellElement
-        | null);
-
+    const cell = targetNode?.closest?.('td, th') as HTMLTableCellElement | null;
     if (cell) {
-      activeTableCellRef.current = cell as HTMLTableCellElement;
+      activeTableCellRef.current = cell;
       setIsInsideTable(true);
-    } else {
+      const tbl = cell.closest('table');
+      if (tbl) {
+        const r = tbl.getBoundingClientRect();
+        setActiveTableRect({ top: r.top, left: r.left, width: r.width });
+      }
+    } else if (targetNode && pageRefs.current[pageIdx]?.contains(targetNode)) {
       setIsInsideTable(false);
+      setActiveTableRect(null);
     }
 
     const sel = window.getSelection();
@@ -487,105 +563,120 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
 
     const range = sel.getRangeAt(0);
     const pageEl = pageRefs.current[pageIdx];
-    if (pageEl && pageEl.contains(range.commonAncestorContainer)) {
-      savedRangeRef.current = range.cloneRange();
-    }
+    if (!pageEl || !pageEl.contains(range.commonAncestorContainer)) return;
 
+    savedRangeRef.current = range.cloneRange();
     const text = sel.toString().trim();
-    if (text.length > 0) {
-      unwrapPersistentMarks();
-      const freshSel = window.getSelection();
-      if (freshSel && freshSel.rangeCount > 0) {
-        savedRangeRef.current = freshSel.getRangeAt(0).cloneRange();
-      }
-      setSelectedText(text);
-      setSelectedPageIdx(pageIdx);
+
+    if (text.length >= 2) {
+      const rect = range.getBoundingClientRect();
+      setHighlightedText(text);
+      setHighlightPageIdx(pageIdx);
+      setHighlightBadgePos({
+        top: rect.top,
+        left: rect.right,
+      });
+    } else if (!showTextAiPopup) {
+      setHighlightedText('');
+      setHighlightBadgePos(null);
     }
   };
 
-  const applyVisualSelectionLock = () => {
-    if (!selectedText || !savedRangeRef.current) return;
-    const pageEl = pageRefs.current[selectedPageIdx];
-    if (!pageEl) return;
-    if (pageEl.querySelector('mark.ai-persistent-selection')) return;
+  // Requirement 4: Execute Text-Level AI and replace ONLY the highlighted text
+  const handleExecuteTextLevelAI = (instruction: string) => {
+    if (!highlightedText) return;
+    const result = runTextLevelAI(highlightedText, instruction);
+    const pageEl = pageRefs.current[highlightPageIdx];
 
-    try {
-      const range = savedRangeRef.current;
-      const mark = window.document.createElement('mark');
-      mark.className = 'ai-persistent-selection';
-      mark.appendChild(range.extractContents());
-      range.insertNode(mark);
-
-      const newRange = window.document.createRange();
-      newRange.selectNodeContents(mark);
-      savedRangeRef.current = newRange;
-    } catch {
-      // Multi-block selection still preserves savedRangeRef
+    if (pageEl && savedRangeRef.current) {
+      pageEl.focus();
+      const sel = window.getSelection();
+      sel?.removeAllRanges();
+      sel?.addRange(savedRangeRef.current);
+      window.document.execCommand('insertHTML', false, result.updatedHtml);
+      checkAndFlowPages(highlightPageIdx);
     }
+
+    setShowTextAiPopup(false);
+    setHighlightedText('');
+    setHighlightBadgePos(null);
   };
 
-  const handleClearSelection = () => {
-    unwrapPersistentMarks();
-    setSelectedText('');
-    savedRangeRef.current = null;
-    window.getSelection()?.removeAllRanges();
+  // =========================================================================
+  // REQUIREMENT 5: PAGE-LEVEL AI EXECUTION (Modifies ONLY the selected page)
+  // =========================================================================
+  const handleExecutePageLevelAI = (
+    pageIndex: number,
+    instruction: string,
+    attachments: { name: string; extractedText: string }[]
+  ) => {
+    const currentHtml = pageRefs.current[pageIndex]
+      ? pageRefs.current[pageIndex]!.innerHTML
+      : pages[pageIndex] || '';
+
+    const result = runPageLevelAI(
+      currentHtml,
+      pageIndex,
+      instruction,
+      title,
+      attachments
+    );
+
+    const nextPages = pages.map((_, i) =>
+      pageRefs.current[i] ? pageRefs.current[i]!.innerHTML : pages[i]
+    );
+    nextPages[pageIndex] = result.updatedPageHtml;
+    if (pageRefs.current[pageIndex]) {
+      pageRefs.current[pageIndex]!.innerHTML = result.updatedPageHtml;
+    }
+    setPages(nextPages);
+    setActivePageAiIdx(null);
+    triggerAutoSave({
+      overrideHtml: getCombinedCleanHtml(nextPages),
+    });
   };
 
-  // Reliable formatting execution (Section 7A)
+  // =========================================================================
+  // FORMATTING & TABLE EDITING (Requirement 13: Word-style Table Resizing)
+  // =========================================================================
   const execFormat = (command: string, value?: string) => {
-    const targetPage =
-      pageRefs.current[activePageIdxRef.current] || pageRefs.current[0];
-    if (!targetPage) return;
-
-    unwrapPersistentMarks();
-    targetPage.focus();
-    if (savedRangeRef.current) {
-      try {
+    const activeEl = pageRefs.current[activePageIdxRef.current];
+    if (activeEl) {
+      activeEl.focus();
+      if (savedRangeRef.current) {
         const sel = window.getSelection();
-        sel?.removeAllRanges();
-        sel?.addRange(savedRangeRef.current);
-      } catch {
-        // ignore stale range
+        if (sel && sel.rangeCount === 0) {
+          sel.addRange(savedRangeRef.current);
+        }
       }
     }
     window.document.execCommand(command, false, value);
-
-    const updatedSel = window.getSelection();
-    if (updatedSel && updatedSel.rangeCount > 0) {
-      savedRangeRef.current = updatedSel.getRangeAt(0).cloneRange();
-    }
     checkAndFlowPages(activePageIdxRef.current);
   };
 
-  // =========================================================================
-  // SECTION 7B: PROPER EDITABLE TABLES (INSERT, ADD/DELETE/MOVE/RESIZE ROWS & COLS)
-  // =========================================================================
   const handleInsertConfiguredTable = (rows: number, cols: number) => {
     const rCount = Math.max(1, Math.min(20, rows));
-    const cCount = Math.max(1, Math.min(12, cols));
+    const cCount = Math.max(1, Math.min(10, cols));
+    let thead = '<thead><tr>';
+    for (let c = 0; c < cCount; c++) {
+      thead += `<th style="width: ${Math.round(100 / cCount)}%;">Header ${
+        c + 1
+      }</th>`;
+    }
+    thead += '</tr></thead>';
 
-    const headerCells = Array.from({ length: cCount })
-      .map((_, c) => `<th style="width: ${Math.floor(100 / cCount)}%;">Header ${c + 1}</th>`)
-      .join('');
+    let tbody = '<tbody>';
+    for (let r = 0; r < Math.max(1, rCount - 1); r++) {
+      tbody += '<tr>';
+      for (let c = 0; c < cCount; c++) {
+        tbody += `<td>Data ${r + 1}.${c + 1}</td>`;
+      }
+      tbody += '</tr>';
+    }
+    tbody += '</tbody>';
 
-    const bodyRows = Array.from({ length: Math.max(1, rCount - 1) })
-      .map(
-        (_, r) =>
-          `<tr>${Array.from({ length: cCount })
-            .map((__, c) => `<td>Cell ${r + 1},${c + 1}</td>`)
-            .join('')}</tr>`
-      )
-      .join('');
-
-    const tableHtml = `
-      <table>
-        <thead><tr>${headerCells}</tr></thead>
-        <tbody>${bodyRows}</tbody>
-      </table>
-      <p><br/></p>
-    `;
-    setShowTablePicker(false);
-    execFormat('insertHTML', tableHtml);
+    execFormat('insertHTML', `<table>${thead}${tbody}</table><p><br/></p>`);
+    setTableMenuPos(null);
   };
 
   const modifyActiveTable = (
@@ -604,32 +695,42 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
       | 'col-wider'
       | 'col-narrower'
       | 'row-taller'
-      | 'row-shorter'
+      | 'table-wider'
+      | 'table-narrower'
   ) => {
     const cell = activeTableCellRef.current;
     if (!cell) return;
-    const row = cell.closest('tr');
-    const table = cell.closest('table');
+    const row = cell.closest('tr') as HTMLTableRowElement | null;
+    const table = cell.closest('table') as HTMLTableElement | null;
     if (!row || !table) return;
 
-    const cellIndex = cell.cellIndex;
+    const colIdx = cell.cellIndex;
     const allRows = Array.from(table.querySelectorAll('tr'));
-    const rowIndex = allRows.indexOf(row);
-    const colCount = row.cells.length;
+    const rowIdx = allRows.indexOf(row);
 
     if (action === 'del-table') {
       table.remove();
       setIsInsideTable(false);
-      activeTableCellRef.current = null;
+      setActiveTableRect(null);
+      triggerAutoSave();
+      return;
+    }
+
+    if (action === 'table-wider' || action === 'table-narrower') {
+      const curW = table.getBoundingClientRect().width;
+      const nextW =
+        action === 'table-wider' ? curW + 45 : Math.max(220, curW - 45);
+      table.style.width = `${Math.round(nextW)}px`;
       triggerAutoSave();
       return;
     }
 
     if (action === 'add-row-above' || action === 'add-row-below') {
       const newRow = window.document.createElement('tr');
+      const colCount = row.children.length;
       for (let i = 0; i < colCount; i++) {
         const td = window.document.createElement('td');
-        td.innerHTML = 'New cell';
+        td.innerHTML = '&nbsp;';
         newRow.appendChild(td);
       }
       if (action === 'add-row-above') {
@@ -637,6 +738,18 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
       } else {
         row.parentNode?.insertBefore(newRow, row.nextSibling);
       }
+    } else if (action === 'add-col-left' || action === 'add-col-right') {
+      allRows.forEach((r, rIdx) => {
+        const refCell = r.children[colIdx] || r.lastElementChild;
+        const isHeader = rIdx === 0 && r.querySelector('th');
+        const newCell = window.document.createElement(isHeader ? 'th' : 'td');
+        newCell.innerHTML = isHeader ? 'New Header' : '&nbsp;';
+        if (action === 'add-col-left') {
+          r.insertBefore(newCell, refCell);
+        } else {
+          r.insertBefore(newCell, refCell ? refCell.nextSibling : null);
+        }
+      });
     } else if (action === 'del-row') {
       if (allRows.length <= 1) {
         table.remove();
@@ -644,86 +757,212 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
       } else {
         row.remove();
       }
-    } else if (action === 'add-col-left' || action === 'add-col-right') {
-      allRows.forEach((r) => {
-        const refCell = r.cells[cellIndex];
-        const isHeader = r.parentElement?.tagName === 'THEAD' || refCell?.tagName === 'TH';
-        const newCell = window.document.createElement(isHeader ? 'th' : 'td');
-        newCell.innerHTML = isHeader ? 'Header' : 'Cell';
-        if (action === 'add-col-left') {
-          r.insertBefore(newCell, refCell);
-        } else {
-          r.insertBefore(newCell, refCell ? refCell.nextSibling : null);
-        }
-      });
     } else if (action === 'del-col') {
+      const colCount = row.children.length;
       if (colCount <= 1) {
         table.remove();
         setIsInsideTable(false);
       } else {
         allRows.forEach((r) => {
-          if (r.cells[cellIndex]) r.deleteCell(cellIndex);
+          if (r.children[colIdx]) r.children[colIdx].remove();
         });
       }
-    } else if (action === 'row-up' && rowIndex > 0) {
-      const prevRow = allRows[rowIndex - 1];
+    } else if (action === 'row-up' && rowIdx > 0) {
+      const prevRow = allRows[rowIdx - 1];
       if (prevRow.parentNode === row.parentNode) {
         row.parentNode?.insertBefore(row, prevRow);
       }
-    } else if (action === 'row-down' && rowIndex < allRows.length - 1) {
-      const nextRow = allRows[rowIndex + 1];
+    } else if (action === 'row-down' && rowIdx < allRows.length - 1) {
+      const nextRow = allRows[rowIdx + 1];
       if (nextRow.parentNode === row.parentNode) {
         row.parentNode?.insertBefore(nextRow, row);
       }
-    } else if (action === 'col-left' && cellIndex > 0) {
+    } else if (action === 'col-left' && colIdx > 0) {
       allRows.forEach((r) => {
-        const cur = r.cells[cellIndex];
-        const prev = r.cells[cellIndex - 1];
+        const cur = r.children[colIdx];
+        const prev = r.children[colIdx - 1];
         if (cur && prev) r.insertBefore(cur, prev);
       });
-    } else if (action === 'col-right' && cellIndex < colCount - 1) {
+    } else if (action === 'col-right' && colIdx < row.children.length - 1) {
       allRows.forEach((r) => {
-        const cur = r.cells[cellIndex];
-        const next = r.cells[cellIndex + 1];
+        const cur = r.children[colIdx];
+        const next = r.children[colIdx + 1];
         if (cur && next) r.insertBefore(next, cur);
       });
     } else if (action === 'col-wider' || action === 'col-narrower') {
-      const currentW = cell.offsetWidth || 120;
-      const nextW =
+      const currentWidth = cell.getBoundingClientRect().width;
+      const nextWidth =
         action === 'col-wider'
-          ? currentW + 28
-          : Math.max(50, currentW - 28);
+          ? currentWidth + 25
+          : Math.max(50, currentWidth - 25);
       allRows.forEach((r) => {
-        if (r.cells[cellIndex]) {
-          (r.cells[cellIndex] as HTMLElement).style.width = `${nextW}px`;
-        }
+        const c = r.children[colIdx] as HTMLElement | undefined;
+        if (c) c.style.width = `${Math.round(nextWidth)}px`;
       });
-    } else if (action === 'row-taller' || action === 'row-shorter') {
-      const currentH = row.offsetHeight || 36;
-      const nextH =
-        action === 'row-taller'
-          ? currentH + 14
-          : Math.max(24, currentH - 14);
-      (row as HTMLElement).style.height = `${nextH}px`;
+    } else if (action === 'row-taller') {
+      const currentHeight = row.getBoundingClientRect().height;
+      row.style.height = `${Math.round(currentHeight + 14)}px`;
     }
 
+    const r = table.getBoundingClientRect();
+    setActiveTableRect({ top: r.top, left: r.left, width: r.width });
     triggerAutoSave();
   };
 
-  const handleInsertImage = () => {
-    const url = window.prompt(
-      'Enter image URL:',
-      'https://images.unsplash.com/photo-1434030216411-0b793f4b4173?auto=format&fit=crop&w=700&q=80'
-    );
-    if (!url) return;
-    execFormat(
-      'insertHTML',
-      `<figure style="margin: 14px 0; text-align: center;"><img src="${url}" alt="Document Image" style="max-width: 100%; height: auto; border: 1px solid #CBD5E1;" /></figure><p><br/></p>`
-    );
+  // Interactive Mouse Dragging of Table Column & Row Borders (Requirement 13)
+  const handlePageMouseMoveForTableResize = (
+    pageIdx: number,
+    e: React.MouseEvent<HTMLDivElement>
+  ) => {
+    if (tableResizeDragRef.current) {
+      const drag = tableResizeDragRef.current;
+      if (drag.type === 'col') {
+        const nextW = Math.max(45, drag.origSize + (e.clientX - drag.startX));
+        drag.targetEl.style.width = `${Math.round(nextW)}px`;
+      } else {
+        const nextH = Math.max(24, drag.origSize + (e.clientY - drag.startY));
+        drag.targetEl.style.height = `${Math.round(nextH)}px`;
+      }
+      return;
+    }
+
+    const target = e.target as HTMLElement;
+    const cell = target.closest?.('td, th') as HTMLTableCellElement | null;
+    const pageEl = pageRefs.current[pageIdx];
+    if (!cell || !pageEl) {
+      if (pageEl) pageEl.style.cursor = 'text';
+      return;
+    }
+
+    const rect = cell.getBoundingClientRect();
+    const nearRightEdge = Math.abs(e.clientX - rect.right) <= 6;
+    const nearBottomEdge = Math.abs(e.clientY - rect.bottom) <= 6;
+
+    if (nearRightEdge) {
+      pageEl.style.cursor = 'col-resize';
+    } else if (nearBottomEdge) {
+      pageEl.style.cursor = 'row-resize';
+    } else {
+      pageEl.style.cursor = 'text';
+    }
+  };
+
+  const handlePageMouseDownForTableResize = (
+    pageIdx: number,
+    e: React.MouseEvent<HTMLDivElement>
+  ) => {
+    const target = e.target as HTMLElement;
+    const cell = target.closest?.('td, th') as HTMLTableCellElement | null;
+    if (!cell) return;
+
+    const rect = cell.getBoundingClientRect();
+    const nearRightEdge = Math.abs(e.clientX - rect.right) <= 6;
+    const nearBottomEdge = Math.abs(e.clientY - rect.bottom) <= 6;
+
+    if (nearRightEdge) {
+      e.preventDefault();
+      tableResizeDragRef.current = {
+        type: 'col',
+        targetEl: cell,
+        startX: e.clientX,
+        startY: e.clientY,
+        origSize: rect.width,
+        pageIdx,
+      };
+    } else if (nearBottomEdge) {
+      e.preventDefault();
+      const row = cell.closest('tr') as HTMLElement;
+      if (row) {
+        tableResizeDragRef.current = {
+          type: 'row',
+          targetEl: row,
+          startX: e.clientX,
+          startY: e.clientY,
+          origSize: row.getBoundingClientRect().height,
+          pageIdx,
+        };
+      }
+    }
+  };
+
+  const handlePageMouseUpForTableResize = () => {
+    if (tableResizeDragRef.current) {
+      tableResizeDragRef.current = null;
+      triggerAutoSave();
+    }
   };
 
   // =========================================================================
-  // SECTION 8: ADD PAGE vs PAGE BREAK
+  // REQUIREMENT 10: IMAGE INSERTION (Toolbar Button OR Drag-and-Drop) & RESIZING
+  // =========================================================================
+  const addImageFileToPage = (file: File, pageIdx: number, dropX?: number, dropY?: number) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const dataUrl = reader.result as string;
+      const imgProbe = new window.Image();
+      imgProbe.onload = () => {
+        const ratio =
+          imgProbe.naturalHeight > 0
+            ? imgProbe.naturalWidth / imgProbe.naturalHeight
+            : 1.4;
+        const initW = Math.min(320, Math.max(140, imgProbe.naturalWidth));
+        const initH = Math.round(initW / ratio);
+
+        const maxZ = Math.max(
+          10,
+          ...drawings.map((d) => d.zIndex || 10),
+          ...canvasImages.map((im) => im.zIndex || 10)
+        );
+
+        const newImg: CanvasImageElement = {
+          id: `img-${Date.now()}`,
+          pageIndex: pageIdx,
+          src: dataUrl,
+          x: dropX ?? 120,
+          y: dropY ?? 140,
+          width: initW,
+          height: initH,
+          aspectRatio: ratio,
+          zIndex: maxZ + 1,
+          caption: file.name,
+        };
+
+        const nextImages = [...canvasImages, newImg];
+        setCanvasImages(nextImages);
+        setSelectedImageId(newImg.id);
+        setSelectedDrawingId(null);
+        triggerAutoSave({ overrideImages: nextImages });
+      };
+      imgProbe.src = dataUrl;
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const handleImageFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    addImageFileToPage(file, activePageIdxRef.current);
+    e.target.value = '';
+  };
+
+  const handlePageDrop = (
+    pageIdx: number,
+    e: React.DragEvent<HTMLDivElement>
+  ) => {
+    const files = Array.from(e.dataTransfer?.files || []);
+    const imageFile = files.find((f) => f.type.startsWith('image/'));
+    if (!imageFile) return;
+
+    e.preventDefault();
+    e.stopPropagation();
+    const pageRect = e.currentTarget.getBoundingClientRect();
+    const dropX = Math.max(24, Math.round(e.clientX - pageRect.left - 100));
+    const dropY = Math.max(40, Math.round(e.clientY - pageRect.top - 70));
+    addImageFileToPage(imageFile, pageIdx, dropX, dropY);
+  };
+
+  // =========================================================================
+  // REQUIREMENT 8: ADD BLANK PAGE & PAGE BREAK
   // =========================================================================
   const handleAddBlankPage = () => {
     const idx = activePageIdxRef.current;
@@ -731,23 +970,19 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
       pageRefs.current[i] ? pageRefs.current[i]!.innerHTML : pages[i]
     );
     const nextPages = [...currentHtmls];
-    const insertPos = idx + 1;
-    nextPages.splice(insertPos, 0, '<p><br/></p>');
+    nextPages.splice(idx + 1, 0, '<p><br/></p>');
     setPages(nextPages);
-
+    activePageIdxRef.current = idx + 1;
     setTimeout(() => {
-      const newPageEl = pageRefs.current[insertPos];
+      const newPageEl = pageRefs.current[idx + 1];
       if (newPageEl) {
-        newPageEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
         newPageEl.focus();
-        activePageIdxRef.current = insertPos;
+        newPageEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
       }
       triggerAutoSave({
-        overrideHtml: nextPages
-          .map(stripPersistentMarkers)
-          .join('\n<hr class="page-break" />\n'),
+        overrideHtml: getCombinedCleanHtml(nextPages),
       });
-    }, 80);
+    }, 60);
   };
 
   const handleInsertPageBreak = () => {
@@ -755,7 +990,6 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
     const pageEl = pageRefs.current[idx];
     if (!pageEl) return;
 
-    // Move blocks after current cursor (or last block if more than 1) to the next page
     let movedHtml = '<p><br/></p>';
     if (pageEl.children.length > 1) {
       const last = pageEl.lastElementChild!;
@@ -773,68 +1007,48 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
       nextPages.push(movedHtml);
     }
     setPages(nextPages);
-    setTimeout(() => {
-      triggerAutoSave({
-        overrideHtml: nextPages
-          .map(stripPersistentMarkers)
-          .join('\n<hr class="page-break" />\n'),
-      });
-    }, 60);
+    triggerAutoSave({
+      overrideHtml: getCombinedCleanHtml(nextPages),
+    });
   };
 
   // =========================================================================
-  // SECTION 9B–D: INTERACTIVE DRAWING & SHAPES HANDLERS
+  // REQUIREMENT 11 & 12: FULL-PAGE FIGMA-LIKE SHAPE DRAWING & LAYER CONTROLS
   // =========================================================================
-  const pushDrawingHistory = (nextDrawings: DrawingElement[]) => {
-    setDrawingUndoStack((prev) => [...prev.slice(-19), drawings]);
-    setDrawingRedoStack([]);
-    setDrawings(nextDrawings);
-    triggerAutoSave({ overrideDrawings: nextDrawings });
-  };
-
-  const handleUndoDrawing = () => {
-    if (drawingUndoStack.length === 0) return;
-    const prev = drawingUndoStack[drawingUndoStack.length - 1];
-    setDrawingRedoStack((r) => [...r, drawings]);
-    setDrawingUndoStack((u) => u.slice(0, -1));
-    setDrawings(prev);
-    triggerAutoSave({ overrideDrawings: prev });
-  };
-
-  const handleRedoDrawing = () => {
-    if (drawingRedoStack.length === 0) return;
-    const next = drawingRedoStack[drawingRedoStack.length - 1];
-    setDrawingUndoStack((u) => [...u, drawings]);
-    setDrawingRedoStack((r) => r.slice(0, -1));
-    setDrawings(next);
-    triggerAutoSave({ overrideDrawings: next });
-  };
-
-  const getPointerCoords = (
-    e: React.MouseEvent<SVGSVGElement> | React.TouchEvent<SVGSVGElement>
+  const getPageRelativeCoords = (
+    pageEl: HTMLElement,
+    e: React.MouseEvent | React.TouchEvent
   ) => {
-    const rect = e.currentTarget.getBoundingClientRect();
+    const rect = pageEl.getBoundingClientRect();
     const clientX =
       'touches' in e && e.touches.length > 0
         ? e.touches[0].clientX
-        : (e as React.MouseEvent<SVGSVGElement>).clientX;
+        : (e as React.MouseEvent).clientX;
     const clientY =
       'touches' in e && e.touches.length > 0
         ? e.touches[0].clientY
-        : (e as React.MouseEvent<SVGSVGElement>).clientY;
+        : (e as React.MouseEvent).clientY;
     return {
       x: Math.round(clientX - rect.left),
       y: Math.round(clientY - rect.top),
     };
   };
 
-  const handlePagePointerDown = (
+  const handleStartCanvasShapeDraw = (
     pageIdx: number,
     e: React.MouseEvent<SVGSVGElement> | React.TouchEvent<SVGSVGElement>
   ) => {
-    if (!showDrawingBar || activeShapeTool === 'select') return;
+    if (activeShapeTool === 'select') return;
     e.stopPropagation();
-    const { x, y } = getPointerCoords(e);
+    const pageContainer = e.currentTarget.parentElement;
+    if (!pageContainer) return;
+
+    const { x, y } = getPageRelativeCoords(pageContainer, e);
+    const maxZ = Math.max(
+      10,
+      ...drawings.map((d) => d.zIndex || 10),
+      ...canvasImages.map((im) => im.zIndex || 10)
+    );
 
     const newId = `drw-${Date.now()}`;
     const newShape: DrawingElement = {
@@ -843,104 +1057,232 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
       type: activeShapeTool,
       x1: x,
       y1: y,
-      x2: x + 2,
-      y2: y + 2,
+      x2: x + 4,
+      y2: y + 4,
       points: activeShapeTool === 'freehand' ? [{ x, y }] : undefined,
       strokeColor,
+      fillColor,
       strokeWidth,
       lineStyle,
+      zIndex: maxZ + 1,
     };
 
-    setDrawingUndoStack((prev) => [...prev.slice(-19), drawings]);
-    setDrawingRedoStack([]);
     setDrawings((prev) => [...prev, newShape]);
     setSelectedDrawingId(newId);
+    setSelectedImageId(null);
     setDragState({
+      targetKind: 'shape',
       mode: 'create',
-      drawingId: newId,
+      id: newId,
       pageIdx,
       startX: x,
       startY: y,
       origX1: x,
       origY1: y,
-      origX2: x,
-      origY2: y,
+      origX2: x + 4,
+      origY2: y + 4,
     });
   };
 
-  const handlePagePointerMove = (
+  const handleCanvasPointerMove = (
     pageIdx: number,
-    e: React.MouseEvent<SVGSVGElement> | React.TouchEvent<SVGSVGElement>
+    e: React.MouseEvent<HTMLDivElement> | React.TouchEvent<HTMLDivElement>
   ) => {
     if (!dragState || dragState.pageIdx !== pageIdx) return;
-    const { x, y } = getPointerCoords(e);
+    const { x, y } = getPageRelativeCoords(e.currentTarget, e);
+    const dx = x - dragState.startX;
+    const dy = y - dragState.startY;
 
-    setDrawings((prev) =>
-      prev.map((d) => {
-        if (d.id !== dragState.drawingId) return d;
+    if (dragState.targetKind === 'shape') {
+      setDrawings((prev) =>
+        prev.map((d) => {
+          if (d.id !== dragState.id) return d;
 
-        if (dragState.mode === 'create') {
-          if (d.type === 'hline') {
-            return { ...d, x2: x, y2: d.y1 };
+          if (dragState.mode === 'create') {
+            if (d.type === 'hline') return { ...d, x2: x, y2: d.y1 };
+            if (d.type === 'vline') return { ...d, x2: d.x1, y2: y };
+            if (d.type === 'square') {
+              const side = Math.max(Math.abs(x - d.x1), Math.abs(y - d.y1));
+              return {
+                ...d,
+                x2: d.x1 + (x >= d.x1 ? side : -side),
+                y2: d.y1 + (y >= d.y1 ? side : -side),
+              };
+            }
+            if (d.type === 'freehand') {
+              return {
+                ...d,
+                x2: x,
+                y2: y,
+                points: [...(d.points || []), { x, y }],
+              };
+            }
+            return { ...d, x2: x, y2: y };
           }
-          if (d.type === 'vline') {
-            return { ...d, x2: d.x1, y2: y };
-          }
-          if (d.type === 'square') {
-            const side = Math.max(Math.abs(x - d.x1), Math.abs(y - d.y1));
+
+          if (dragState.mode === 'move') {
             return {
               ...d,
-              x2: d.x1 + (x >= d.x1 ? side : -side),
-              y2: d.y1 + (y >= d.y1 ? side : -side),
+              x1: dragState.origX1 + dx,
+              y1: dragState.origY1 + dy,
+              x2: dragState.origX2 + dx,
+              y2: dragState.origY2 + dy,
             };
           }
-          if (d.type === 'freehand') {
+
+          if (dragState.mode === 'resize-nw') return { ...d, x1: x, y1: y };
+          if (dragState.mode === 'resize-se') return { ...d, x2: x, y2: y };
+          if (dragState.mode === 'resize-ne') return { ...d, x2: x, y1: y };
+          if (dragState.mode === 'resize-sw') return { ...d, x1: x, y2: y };
+          if (dragState.mode === 'resize-n') return { ...d, y1: y };
+          if (dragState.mode === 'resize-s') return { ...d, y2: y };
+          if (dragState.mode === 'resize-w') return { ...d, x1: x };
+          if (dragState.mode === 'resize-e') return { ...d, x2: x };
+          return d;
+        })
+      );
+    } else if (dragState.targetKind === 'image') {
+      setCanvasImages((prev) =>
+        prev.map((img) => {
+          if (img.id !== dragState.id) return img;
+          const origW = dragState.origX2 - dragState.origX1;
+          const origH = dragState.origY2 - dragState.origY1;
+          const ratio = dragState.aspectRatio || img.aspectRatio || 1.33;
+
+          if (dragState.mode === 'move') {
             return {
-              ...d,
-              x2: x,
-              y2: y,
-              points: [...(d.points || []), { x, y }],
+              ...img,
+              x: Math.max(0, dragState.origX1 + dx),
+              y: Math.max(0, dragState.origY1 + dy),
             };
           }
-          return { ...d, x2: x, y2: y };
-        }
 
-        if (dragState.mode === 'move') {
-          const dx = x - dragState.startX;
-          const dy = y - dragState.startY;
-          return {
-            ...d,
-            x1: dragState.origX1 + dx,
-            y1: dragState.origY1 + dy,
-            x2: dragState.origX2 + dx,
-            y2: dragState.origY2 + dy,
-          };
-        }
+          // Corner handles maintain aspect ratio (Requirement 10)
+          if (dragState.mode === 'resize-se') {
+            const nextW = Math.max(50, origW + dx);
+            return {
+              ...img,
+              width: Math.round(nextW),
+              height: Math.round(nextW / ratio),
+            };
+          }
+          if (dragState.mode === 'resize-nw') {
+            const nextW = Math.max(50, origW - dx);
+            const nextH = Math.round(nextW / ratio);
+            return {
+              ...img,
+              x: dragState.origX2 - nextW,
+              y: dragState.origY2 - nextH,
+              width: Math.round(nextW),
+              height: nextH,
+            };
+          }
+          if (dragState.mode === 'resize-ne') {
+            const nextW = Math.max(50, origW + dx);
+            const nextH = Math.round(nextW / ratio);
+            return {
+              ...img,
+              y: dragState.origY2 - nextH,
+              width: Math.round(nextW),
+              height: nextH,
+            };
+          }
+          if (dragState.mode === 'resize-sw') {
+            const nextW = Math.max(50, origW - dx);
+            const nextH = Math.round(nextW / ratio);
+            return {
+              ...img,
+              x: dragState.origX2 - nextW,
+              width: Math.round(nextW),
+              height: nextH,
+            };
+          }
 
-        if (dragState.mode === 'resize-start') {
-          return { ...d, x1: x, y1: y };
-        }
-
-        if (dragState.mode === 'resize-end') {
-          return { ...d, x2: x, y2: y };
-        }
-
-        return d;
-      })
-    );
+          // Side handles adjust width or height independently (Requirement 10)
+          if (dragState.mode === 'resize-e') {
+            return { ...img, width: Math.max(40, origW + dx) };
+          }
+          if (dragState.mode === 'resize-w') {
+            const nextW = Math.max(40, origW - dx);
+            return {
+              ...img,
+              x: dragState.origX2 - nextW,
+              width: nextW,
+            };
+          }
+          if (dragState.mode === 'resize-s') {
+            return { ...img, height: Math.max(40, origH + dy) };
+          }
+          if (dragState.mode === 'resize-n') {
+            const nextH = Math.max(40, origH - dy);
+            return {
+              ...img,
+              y: dragState.origY2 - nextH,
+              height: nextH,
+            };
+          }
+          return img;
+        })
+      );
+    }
   };
 
-  const handlePagePointerUp = () => {
+  const handleCanvasPointerUp = () => {
     if (!dragState) return;
+    if (dragState.mode === 'create') {
+      setActiveShapeTool('select');
+    }
     setDragState(null);
-    triggerAutoSave({ overrideDrawings: drawings });
+    triggerAutoSave({
+      overrideDrawings: drawings,
+      overrideImages: canvasImages,
+    });
   };
 
-  const handleDeleteSelectedDrawing = () => {
-    if (!selectedDrawingId) return;
-    const next = drawings.filter((d) => d.id !== selectedDrawingId);
-    pushDrawingHistory(next);
-    setSelectedDrawingId(null);
+  // Layer Ordering (Bring to Front, Bring Forward, Send Backward, Send to Back)
+  const handleLayerAction = (
+    action: 'front' | 'forward' | 'backward' | 'back'
+  ) => {
+    const allZs = [
+      ...drawings.map((d) => d.zIndex ?? 10),
+      ...canvasImages.map((i) => i.zIndex ?? 10),
+    ];
+    const maxZ = allZs.length > 0 ? Math.max(...allZs) : 10;
+    const minZ = allZs.length > 0 ? Math.min(...allZs) : 1;
+
+    if (selectedDrawingId) {
+      const next = drawings.map((d) => {
+        if (d.id !== selectedDrawingId) return d;
+        const cur = d.zIndex ?? 10;
+        const zIndex =
+          action === 'front'
+            ? maxZ + 2
+            : action === 'forward'
+            ? cur + 1
+            : action === 'backward'
+            ? Math.max(1, cur - 1)
+            : Math.max(1, minZ - 1);
+        return { ...d, zIndex };
+      });
+      setDrawings(next);
+      triggerAutoSave({ overrideDrawings: next });
+    } else if (selectedImageId) {
+      const next = canvasImages.map((img) => {
+        if (img.id !== selectedImageId) return img;
+        const cur = img.zIndex ?? 10;
+        const zIndex =
+          action === 'front'
+            ? maxZ + 2
+            : action === 'forward'
+            ? cur + 1
+            : action === 'backward'
+            ? Math.max(1, cur - 1)
+            : Math.max(1, minZ - 1);
+        return { ...img, zIndex };
+      });
+      setCanvasImages(next);
+      triggerAutoSave({ overrideImages: next });
+    }
   };
 
   // =========================================================================
@@ -1010,117 +1352,42 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
   };
 
   // =========================================================================
-  // SECTION 6.3 & 11: AI CONTENT APPLICATION (INCLUDING GROUP-SCOPED APPLY)
+  // REQUIREMENT 6 & 7: MAIN AI ASSISTANT (Scope + Reference Attachments + Direct Execution)
   // =========================================================================
-  const handleApplyAiContent = (
-    msg: AIMessage,
-    mode: 'replace' | 'below' | 'cursor' | 'append' | 'group'
+  const handleMainAiFileAttach = async (
+    e: React.ChangeEvent<HTMLInputElement>
   ) => {
-    const generatedHtml = msg.generatedHtml || '';
-    if (!generatedHtml) return;
-
-    // Group-specific application (Section 11: modifies ONLY pages in that group)
-    if (mode === 'group' && msg.targetGroupId) {
-      const targetGroup = pageGroups.find((g) => g.id === msg.targetGroupId);
-      if (targetGroup && targetGroup.pageIndices.length > 0) {
-        const firstPageIdx = targetGroup.pageIndices[0];
-        const nextPages = pages.map((_, i) =>
-          pageRefs.current[i] ? pageRefs.current[i]!.innerHTML : pages[i]
-        );
-        nextPages[firstPageIdx] = generatedHtml;
-        if (pageRefs.current[firstPageIdx]) {
-          pageRefs.current[firstPageIdx]!.innerHTML = generatedHtml;
-        }
-        setPages(nextPages);
-        const updatedHistory = doc.aiHistory.map((m) =>
-          m.id === msg.id ? { ...m, inserted: true } : m
-        );
-        triggerAutoSave({
-          overrideHtml: getCombinedCleanHtml(nextPages),
-          overrideAiHistory: updatedHistory,
+    const files = Array.from(e.target.files || []);
+    const added: { name: string; extractedText: string }[] = [];
+    for (const file of files) {
+      if (
+        file.type.startsWith('text/') ||
+        file.name.endsWith('.txt') ||
+        file.name.endsWith('.md')
+      ) {
+        const text = await file.text();
+        added.push({ name: file.name, extractedText: text.slice(0, 600) });
+      } else {
+        added.push({
+          name: file.name,
+          extractedText: `Reference context extracted from "${file.name}".`,
         });
-        if (typeof window !== 'undefined' && window.innerWidth <= 1024) {
-          setShowAiPanel(false);
-        }
-        return;
       }
     }
-
-    const targetPageIdx = selectedText
-      ? selectedPageIdx
-      : activePageIdxRef.current;
-    const targetPageEl =
-      pageRefs.current[targetPageIdx] ||
-      pageRefs.current[pageRefs.current.length - 1];
-
-    if (!targetPageEl) return;
-
-    if (mode === 'replace') {
-      const persistentMark = targetPageEl.querySelector(
-        'mark.ai-persistent-selection'
-      );
-      if (persistentMark) {
-        const temp = window.document.createElement('div');
-        temp.innerHTML = generatedHtml;
-        persistentMark.replaceWith(...Array.from(temp.childNodes));
-      } else if (savedRangeRef.current) {
-        targetPageEl.focus();
-        const sel = window.getSelection();
-        sel?.removeAllRanges();
-        sel?.addRange(savedRangeRef.current);
-        window.document.execCommand('insertHTML', false, generatedHtml);
-      } else {
-        targetPageEl.innerHTML += generatedHtml;
-      }
-      handleClearSelection();
-      checkAndFlowPages(targetPageIdx);
-    } else if (mode === 'below') {
-      const persistentMark = targetPageEl.querySelector(
-        'mark.ai-persistent-selection'
-      );
-      if (persistentMark) {
-        const blockParent =
-          persistentMark.closest('p, h1, h2, h3, li, div') || persistentMark;
-        blockParent.insertAdjacentHTML('afterend', generatedHtml);
-        unwrapPersistentMarks();
-      } else {
-        targetPageEl.innerHTML += generatedHtml;
-      }
-      checkAndFlowPages(targetPageIdx);
-    } else if (mode === 'cursor') {
-      unwrapPersistentMarks();
-      targetPageEl.focus();
-      if (savedRangeRef.current) {
-        const sel = window.getSelection();
-        sel?.removeAllRanges();
-        sel?.addRange(savedRangeRef.current);
-        window.document.execCommand('insertHTML', false, generatedHtml);
-      } else {
-        targetPageEl.innerHTML += generatedHtml;
-      }
-      checkAndFlowPages(targetPageIdx);
-    } else if (mode === 'append') {
-      unwrapPersistentMarks();
-      const lastIdx = pages.length - 1;
-      const lastPageEl = pageRefs.current[lastIdx];
-      if (lastPageEl) {
-        lastPageEl.innerHTML += `\n${generatedHtml}`;
-        checkAndFlowPages(lastIdx);
-      }
-    }
-
-    const updatedHistory = doc.aiHistory.map((m) =>
-      m.id === msg.id ? { ...m, inserted: true } : m
-    );
-    triggerAutoSave({ overrideAiHistory: updatedHistory });
-    if (typeof window !== 'undefined' && window.innerWidth <= 1024) {
-      setShowAiPanel(false);
-    }
+    setAiUploadedRefs((prev) => [...prev, ...added]);
+    e.target.value = '';
   };
 
-  const handleSendAiPrompt = (customInstruction?: string) => {
-    const query = (customInstruction ?? promptInput).trim();
-    if (!query) return;
+  const handleSendAiPrompt = () => {
+    if (isMainAiRecording) stopMainAiVoice();
+    const query = combinedMainAiInput.trim();
+    if (!query && aiUploadedRefs.length === 0) return;
+
+    const effectiveQuery =
+      query ||
+      `Update the selected scope using the attached reference material (${aiUploadedRefs
+        .map((r) => r.name)
+        .join(', ')}).`;
 
     const now = new Date();
     const timeStr = `${String(now.getHours()).padStart(2, '0')}:${String(
@@ -1130,51 +1397,93 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
     const userMsg: AIMessage = {
       id: `u-${Date.now()}`,
       role: 'user',
-      prompt: query,
+      prompt: effectiveQuery,
       timestamp: timeStr,
+      attachments: aiUploadedRefs.map((a) => a.name),
     };
 
     const currentPagesHtml = pages.map((_, i) =>
       pageRefs.current[i] ? pageRefs.current[i]!.innerHTML : pages[i]
     );
 
+    // Determine exact target page indices from Main AI Focus Scope (Requirement 6)
+    let explicitGroupId: string | undefined;
+    let explicitPageIndices: number[] | undefined;
+
+    if (mainAiScope === 'group' && aiTargetGroupId) {
+      explicitGroupId = aiTargetGroupId;
+      const grp = pageGroups.find((g) => g.id === aiTargetGroupId);
+      if (grp) {
+        explicitPageIndices =
+          aiGroupPageSelection === 'all'
+            ? grp.pageIndices
+            : [aiGroupPageSelection];
+      }
+    } else if (mainAiScope === 'page') {
+      explicitPageIndices = [aiTargetSinglePage];
+    }
+
     setPromptInput('');
     setIsAiLoading(true);
 
     setTimeout(() => {
       const result = runWorkspaceAIPrompt(
-        query,
+        effectiveQuery,
         {
           ...doc,
           metadata: { ...doc.metadata, pageGroups },
         },
-        selectedText,
+        '', // Main AI assistant NEVER uses highlighted text (Requirement 4 & 6)
         currentPagesHtml,
-        aiTargetGroupId || undefined
+        explicitGroupId,
+        explicitPageIndices,
+        aiUploadedRefs
       );
+
+      // Directly implement the requested changes on the target pages in the workspace!
+      const nextPages = [...currentPagesHtml];
+      if (result.directPageUpdates) {
+        Object.entries(result.directPageUpdates).forEach(([idxStr, newHtml]) => {
+          const pIdx = parseInt(idxStr, 10);
+          if (pIdx >= 0 && pIdx < nextPages.length) {
+            nextPages[pIdx] = newHtml;
+            if (pageRefs.current[pIdx]) {
+              pageRefs.current[pIdx]!.innerHTML = newHtml;
+            }
+          }
+        });
+        setPages(nextPages);
+      }
 
       const assistantMsg: AIMessage = {
         id: `a-${Date.now() + 1}`,
         role: 'assistant',
-        prompt: query,
+        prompt: effectiveQuery,
         summary: result.summary,
         generatedHtml: result.generatedHtml,
         timestamp: timeStr,
-        inserted: false,
+        inserted: true,
         targetGroupId: result.targetGroupId,
         targetGroupName: result.targetGroupName,
+        targetPageIndex: result.targetPageIndices?.[0],
       };
 
       const nextHistory = [...doc.aiHistory, userMsg, assistantMsg];
       setIsAiLoading(false);
-      triggerAutoSave({ overrideAiHistory: nextHistory });
-    }, 360);
+      setAiUploadedRefs([]);
+      triggerAutoSave({
+        overrideHtml: getCombinedCleanHtml(nextPages),
+        overrideAiHistory: nextHistory,
+      });
+    }, 320);
   };
 
-  const truncatedSelection =
-    selectedText.length > 68
-      ? `${selectedText.slice(0, 68).trim()}...`
-      : selectedText;
+  const selectedDrawingObj =
+    drawings.find((d) => d.id === selectedDrawingId) || null;
+  const selectedImageObj =
+    canvasImages.find((img) => img.id === selectedImageId) || null;
+  const activeGroupObj =
+    pageGroups.find((g) => g.id === aiTargetGroupId) || null;
 
   return (
     <div
@@ -1185,8 +1494,17 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
         backgroundColor: 'var(--bg-ivory)',
       }}
     >
+      {/* Hidden File Input for Toolbar Image Upload (Requirement 10) */}
+      <input
+        ref={imageInputRef}
+        type="file"
+        accept="image/*"
+        onChange={handleImageFileSelect}
+        style={{ display: 'none' }}
+      />
+
       {/* =====================================================================
-          5.1 TOP WORKSPACE HEADER
+          TOP WORKSPACE HEADER (Includes Local File Save/Open per Requirement 14)
       ===================================================================== */}
       <header
         className="no-print"
@@ -1202,7 +1520,6 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
           flexShrink: 0,
         }}
       >
-        {/* Left Group */}
         <div
           style={{
             display: 'flex',
@@ -1251,7 +1568,6 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
             </span>
           </div>
 
-          {/* Editable Document Title */}
           <input
             type="text"
             value={title}
@@ -1268,7 +1584,7 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
               padding: '4px 8px',
               outline: 'none',
               minWidth: '100px',
-              maxWidth: '360px',
+              maxWidth: '340px',
               width: '100%',
               textOverflow: 'ellipsis',
             }}
@@ -1279,7 +1595,6 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
             title="Edit document title"
           />
 
-          {/* Save Status Indicator */}
           <div
             className="mono-label"
             style={{
@@ -1322,7 +1637,7 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
           </div>
         </div>
 
-        {/* Right Group */}
+        {/* Right Actions: Undo/Redo, Save File to Computer, Open File, Export, AI Assistant */}
         <div
           style={{
             display: 'flex',
@@ -1350,6 +1665,44 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
             <Redo2 size={14} />
           </button>
 
+          {/* Requirement 14: Save Individual File to Computer & Open File */}
+          {onSaveToComputer && (
+            <button
+              onClick={() =>
+                onSaveToComputer({
+                  ...doc,
+                  title,
+                  content: getCombinedCleanHtml(),
+                  metadata: {
+                    ...doc.metadata,
+                    layout,
+                    drawings,
+                    images: canvasImages,
+                    pageGroups,
+                  },
+                })
+              }
+              className="btn-ed-subtle"
+              style={{ height: '32px', padding: '0 10px' }}
+              title="Save document as an individual file on your computer"
+            >
+              <HardDriveDownload size={13} color="var(--accent-blue)" />
+              <span className="hide-on-mobile">Save File</span>
+            </button>
+          )}
+
+          {onOpenFromComputer && (
+            <button
+              onClick={onOpenFromComputer}
+              className="btn-ed-subtle hide-on-mobile"
+              style={{ height: '32px', padding: '0 10px' }}
+              title="Open a saved document file from your computer"
+            >
+              <HardDriveUpload size={13} />
+              <span>Open File</span>
+            </button>
+          )}
+
           {/* Export Dropdown */}
           <div ref={exportMenuRef} style={{ position: 'relative' }}>
             <button
@@ -1365,14 +1718,14 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
             {showExportMenu && (
               <div
                 style={{
-                  position: 'absolute',
-                  top: 'calc(100% + 6px)',
-                  right: 0,
-                  width: '185px',
+                  position: 'fixed',
+                  top: '52px',
+                  right: '96px',
+                  width: '195px',
                   backgroundColor: 'var(--bg-ivory)',
                   border: '1px solid var(--border-stone)',
-                  boxShadow: '0 8px 20px rgba(10, 25, 78, 0.12)',
-                  zIndex: 100,
+                  boxShadow: '0 10px 28px rgba(10, 25, 78, 0.18)',
+                  zIndex: 250,
                 }}
               >
                 <button
@@ -1386,6 +1739,7 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
                         ...doc.metadata,
                         layout,
                         drawings,
+                        images: canvasImages,
                         pageGroups,
                       },
                     });
@@ -1415,6 +1769,7 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
                         ...doc.metadata,
                         layout,
                         drawings,
+                        images: canvasImages,
                         pageGroups,
                       },
                     });
@@ -1459,7 +1814,6 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
             )}
           </div>
 
-          {/* AI Assistant Toggle */}
           <button
             onClick={() => setShowAiPanel((p) => !p)}
             className="btn-ed-subtle"
@@ -1477,7 +1831,7 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
       </header>
 
       {/* =====================================================================
-          5.3 & 7–10 FORMATTING AND PAGE MANAGEMENT TOOLBAR
+          FORMATTING & INSERTION TOOLBAR
       ===================================================================== */}
       <div
         className="no-print"
@@ -1492,7 +1846,6 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
           flexShrink: 0,
         }}
       >
-        {/* Font Family */}
         <select
           value={doc.metadata.fontFamily || 'Times New Roman'}
           onChange={(e) => {
@@ -1502,7 +1855,7 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
             });
           }}
           className="ed-select"
-          style={{ width: '136px', padding: '4px 7px', fontSize: '12px' }}
+          style={{ width: '132px', padding: '4px 7px', fontSize: '12px' }}
         >
           <option value="Times New Roman">Times New Roman</option>
           <option value="Georgia">Georgia</option>
@@ -1512,12 +1865,11 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
           <option value="Calibri">Calibri</option>
         </select>
 
-        {/* Headings */}
         <select
           onChange={(e) => execFormat('formatBlock', e.target.value)}
           defaultValue="P"
           className="ed-select"
-          style={{ width: '106px', padding: '4px 7px', fontSize: '12px' }}
+          style={{ width: '104px', padding: '4px 7px', fontSize: '12px' }}
         >
           <option value="P">Normal</option>
           <option value="H1">Heading 1</option>
@@ -1525,12 +1877,11 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
           <option value="H3">Heading 3</option>
         </select>
 
-        {/* Font Size */}
         <select
           onChange={(e) => execFormat('fontSize', e.target.value)}
           defaultValue="3"
           className="ed-select"
-          style={{ width: '70px', padding: '4px 6px', fontSize: '12px' }}
+          style={{ width: '68px', padding: '4px 6px', fontSize: '12px' }}
         >
           <option value="2">10 pt</option>
           <option value="3">12 pt</option>
@@ -1539,13 +1890,12 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
           <option value="6">24 pt</option>
         </select>
 
-        {/* Bold, Italic, Underline (with preventDefault so focus/selection never drops!) */}
         <button
           onMouseDown={(e) => e.preventDefault()}
           onClick={() => execFormat('bold')}
           className="btn-ed-subtle"
           style={{ padding: '5px 8px' }}
-          title="Bold (Ctrl+B)"
+          title="Bold"
         >
           <Bold size={13} />
         </button>
@@ -1554,7 +1904,7 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
           onClick={() => execFormat('italic')}
           className="btn-ed-subtle"
           style={{ padding: '5px 8px' }}
-          title="Italic (Ctrl+I)"
+          title="Italic"
         >
           <Italic size={13} />
         </button>
@@ -1563,12 +1913,11 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
           onClick={() => execFormat('underline')}
           className="btn-ed-subtle"
           style={{ padding: '5px 8px' }}
-          title="Underline (Ctrl+U)"
+          title="Underline"
         >
           <Underline size={13} />
         </button>
 
-        {/* Text Colour & Highlight */}
         <label
           className="btn-ed-subtle"
           style={{ padding: '4px 7px', cursor: 'pointer' }}
@@ -1583,36 +1932,11 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
           />
         </label>
 
-        <label
-          className="btn-ed-subtle"
-          style={{ padding: '4px 7px', cursor: 'pointer' }}
-          title="Highlight"
-        >
-          <span
-            style={{
-              fontSize: '10px',
-              backgroundColor: '#FEF08A',
-              padding: '0 3px',
-              color: '#111',
-            }}
-          >
-            ab
-          </span>
-          <input
-            type="color"
-            defaultValue="#FEF08A"
-            onChange={(e) => execFormat('hiliteColor', e.target.value)}
-            style={{ width: '13px', height: '13px', border: 'none', padding: 0 }}
-          />
-        </label>
-
-        {/* Alignment */}
         <button
           onMouseDown={(e) => e.preventDefault()}
           onClick={() => execFormat('justifyLeft')}
           className="btn-ed-subtle"
           style={{ padding: '5px 7px' }}
-          title="Align Left"
         >
           <AlignLeft size={13} />
         </button>
@@ -1621,7 +1945,6 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
           onClick={() => execFormat('justifyCenter')}
           className="btn-ed-subtle"
           style={{ padding: '5px 7px' }}
-          title="Align Center"
         >
           <AlignCenter size={13} />
         </button>
@@ -1630,7 +1953,6 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
           onClick={() => execFormat('justifyRight')}
           className="btn-ed-subtle"
           style={{ padding: '5px 7px' }}
-          title="Align Right"
         >
           <AlignRight size={13} />
         </button>
@@ -1639,31 +1961,26 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
           onClick={() => execFormat('justifyFull')}
           className="btn-ed-subtle"
           style={{ padding: '5px 7px' }}
-          title="Justify"
         >
           <AlignJustify size={13} />
         </button>
 
-        {/* Line Spacing */}
         <select
           value={lineSpacing}
           onChange={(e) => setLineSpacing(e.target.value)}
           className="ed-select"
-          style={{ width: '78px', padding: '4px 5px', fontSize: '11.5px' }}
-          title="Line Spacing"
+          style={{ width: '74px', padding: '4px 5px', fontSize: '11.5px' }}
         >
           <option value="1.4">1.15x</option>
           <option value="1.75">1.5x</option>
           <option value="2.1">2.0x</option>
         </select>
 
-        {/* Lists */}
         <button
           onMouseDown={(e) => e.preventDefault()}
           onClick={() => execFormat('insertUnorderedList')}
           className="btn-ed-subtle"
           style={{ padding: '5px 7px' }}
-          title="Bulleted List"
         >
           <List size={13} />
         </button>
@@ -1672,134 +1989,99 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
           onClick={() => execFormat('insertOrderedList')}
           className="btn-ed-subtle"
           style={{ padding: '5px 7px' }}
-          title="Numbered List"
         >
           <ListOrdered size={13} />
         </button>
 
-        {/* Section 7B: Editable Table Picker */}
-        <div ref={tableMenuRef} style={{ position: 'relative' }}>
-          <button
-            onMouseDown={(e) => e.preventDefault()}
-            onClick={() => setShowTablePicker((prev) => !prev)}
-            className="btn-ed-subtle"
-            style={{
-              padding: '5px 9px',
-              backgroundColor: showTablePicker
-                ? 'var(--bg-stone)'
-                : 'transparent',
-            }}
-            title="Insert Editable Table"
-          >
-            <Table size={13} />
-            <span>Table</span>
-          </button>
+        {/* Requirement 13: Table Button (Opens fixed overlay above workspace, never clipped!) */}
+        <button
+          ref={tableBtnRef}
+          onMouseDown={(e) => e.preventDefault()}
+          onClick={() => {
+            setShapeMenuPos(null);
+            if (tableMenuPos) {
+              setTableMenuPos(null);
+            } else if (tableBtnRef.current) {
+              const r = tableBtnRef.current.getBoundingClientRect();
+              setTableMenuPos({
+                top: r.bottom + 6,
+                left: Math.min(r.left, window.innerWidth - 240),
+              });
+            }
+          }}
+          className="btn-ed-subtle"
+          style={{
+            padding: '5px 9px',
+            backgroundColor: tableMenuPos ? 'var(--bg-stone)' : 'transparent',
+          }}
+        >
+          <Table size={13} />
+          <span>Table</span>
+          <ChevronDown size={11} />
+        </button>
 
-          {showTablePicker && (
-            <div
-              style={{
-                position: 'absolute',
-                top: 'calc(100% + 6px)',
-                left: 0,
-                width: '220px',
-                backgroundColor: 'var(--bg-ivory)',
-                border: '1px solid var(--border-stone)',
-                boxShadow: '0 8px 20px rgba(10, 25, 78, 0.14)',
-                padding: '12px',
-                zIndex: 110,
-              }}
-            >
-              <div className="ed-field-label" style={{ marginBottom: '8px' }}>
-                Insert Table ({newTableRows} × {newTableCols})
-              </div>
-              <div
-                style={{
-                  display: 'grid',
-                  gridTemplateColumns: '1fr 1fr',
-                  gap: '8px',
-                  marginBottom: '10px',
-                }}
-              >
-                <div>
-                  <label className="ed-field-label">Rows</label>
-                  <input
-                    type="number"
-                    min={1}
-                    max={20}
-                    value={newTableRows}
-                    onChange={(e) =>
-                      setNewTableRows(parseInt(e.target.value || '3', 10))
-                    }
-                    className="ed-input"
-                    style={{ padding: '5px 8px', fontSize: '12px' }}
-                  />
-                </div>
-                <div>
-                  <label className="ed-field-label">Columns</label>
-                  <input
-                    type="number"
-                    min={1}
-                    max={10}
-                    value={newTableCols}
-                    onChange={(e) =>
-                      setNewTableCols(parseInt(e.target.value || '3', 10))
-                    }
-                    className="ed-input"
-                    style={{ padding: '5px 8px', fontSize: '12px' }}
-                  />
-                </div>
-              </div>
-              <button
-                onMouseDown={(e) => e.preventDefault()}
-                onClick={() =>
-                  handleInsertConfiguredTable(newTableRows, newTableCols)
-                }
-                className="btn-ed-primary"
-                style={{ width: '100%', padding: '7px 10px', fontSize: '10px' }}
-              >
-                Insert Table
-              </button>
-            </div>
-          )}
-        </div>
-
-        {/* Image */}
+        {/* Requirement 10: Image Import Button (Also supports Drag & Drop onto page) */}
         <button
           onMouseDown={(e) => e.preventDefault()}
-          onClick={handleInsertImage}
+          onClick={() => imageInputRef.current?.click()}
           className="btn-ed-subtle"
           style={{ padding: '5px 9px' }}
-          title="Insert Image"
+          title="Import Image from Files (or drag & drop an image onto any page)"
         >
-          <ImageIcon size={13} />
+          <ImageIcon size={13} color="var(--accent-blue)" />
           <span>Image</span>
         </button>
 
-        {/* Page Break */}
+        {/* Requirement 11 & 13: Shape Dropdown Overlay Button */}
+        <button
+          ref={shapeBtnRef}
+          onClick={() => {
+            setTableMenuPos(null);
+            if (shapeMenuPos) {
+              setShapeMenuPos(null);
+            } else if (shapeBtnRef.current) {
+              const r = shapeBtnRef.current.getBoundingClientRect();
+              setShapeMenuPos({
+                top: r.bottom + 6,
+                left: Math.min(r.left, window.innerWidth - 220),
+              });
+            }
+          }}
+          className={
+            activeShapeTool !== 'select' ? 'btn-ed-primary' : 'btn-ed-subtle'
+          }
+          style={{ padding: '5px 9px' }}
+          title="Select a shape and draw anywhere on the page"
+        >
+          <PenTool size={13} />
+          <span>
+            {activeShapeTool === 'select'
+              ? 'Shapes'
+              : `Drawing: ${activeShapeTool}`}
+          </span>
+          <ChevronDown size={11} />
+        </button>
+
         <button
           onMouseDown={(e) => e.preventDefault()}
           onClick={handleInsertPageBreak}
           className="btn-ed-subtle"
           style={{ padding: '5px 9px' }}
-          title="Move content to next page"
         >
           <SeparatorHorizontal size={13} />
           <span>Page Break</span>
         </button>
 
-        {/* Section 8: Add Page */}
         <button
           onMouseDown={(e) => e.preventDefault()}
           onClick={handleAddBlankPage}
           className="btn-ed-subtle"
           style={{ padding: '5px 9px' }}
-          title="Add a new blank page to document"
         >
           <FilePlus2 size={13} color="var(--accent-blue)" />
           <span>Add Page</span>
         </button>
 
-        {/* Section 10: Group Pages */}
         <button
           onClick={() => setShowGroupsSidebar((prev) => !prev)}
           className="btn-ed-subtle"
@@ -1809,42 +2091,248 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
               ? 'var(--bg-stone)'
               : 'transparent',
           }}
-          title="Organise document pages into named sections"
         >
           <Layers size={13} color="var(--accent-blue)" />
           <span>Group Pages ({pageGroups.length})</span>
         </button>
 
-        {/* Section 9A: Change Page Layout */}
         <button
           onClick={() => setShowLayoutModal(true)}
           className="btn-ed-subtle"
           style={{ padding: '5px 9px' }}
-          title="Change Page Size, Orientation, Margins, Columns & Borders"
         >
           <LayoutTemplate size={13} color="var(--accent-blue)" />
-          <span>Change Page Layout</span>
-        </button>
-
-        {/* Section 9B: Drawing & Shapes ("Board / Draw") */}
-        <button
-          onClick={() => setShowDrawingBar((prev) => !prev)}
-          className="btn-ed-subtle"
-          style={{
-            padding: '5px 9px',
-            backgroundColor: showDrawingBar
-              ? 'var(--bg-stone)'
-              : 'transparent',
-          }}
-          title="Draw lines, arrows, rectangles, circles and freehand shapes"
-        >
-          <PenTool size={13} color="var(--accent-blue)" />
-          <span>Draw / Shapes</span>
+          <span>Page Layout</span>
         </button>
       </div>
 
       {/* =====================================================================
-          SECTION 7B: CONTEXTUAL TABLE STRUCTURE BAR (Shown when cursor is in a Table)
+          REQUIREMENT 13: FIXED OVERLAY DROPDOWN FOR TABLE INSERTION
+      ===================================================================== */}
+      {tableMenuPos && (
+        <div
+          className="no-print"
+          style={{
+            position: 'fixed',
+            top: `${tableMenuPos.top}px`,
+            left: `${tableMenuPos.left}px`,
+            width: '230px',
+            backgroundColor: 'var(--bg-ivory)',
+            border: '1px solid var(--border-stone)',
+            boxShadow: '0 12px 28px rgba(10, 25, 78, 0.2)',
+            padding: '12px',
+            zIndex: 260,
+          }}
+        >
+          <div
+            style={{
+              display: 'flex',
+              justifyContent: 'space-between',
+              alignItems: 'center',
+              marginBottom: '8px',
+            }}
+          >
+            <span className="ed-field-label" style={{ marginBottom: 0 }}>
+              Insert Table ({newTableRows} × {newTableCols})
+            </span>
+            <button
+              onClick={() => setTableMenuPos(null)}
+              style={{
+                background: 'none',
+                border: 'none',
+                cursor: 'pointer',
+                color: 'var(--ink-muted)',
+              }}
+            >
+              <X size={13} />
+            </button>
+          </div>
+          <div
+            style={{
+              display: 'grid',
+              gridTemplateColumns: '1fr 1fr',
+              gap: '8px',
+              marginBottom: '10px',
+            }}
+          >
+            <div>
+              <label className="ed-field-label">Rows</label>
+              <input
+                type="number"
+                min={1}
+                max={20}
+                value={newTableRows}
+                onChange={(e) =>
+                  setNewTableRows(parseInt(e.target.value || '3', 10))
+                }
+                className="ed-input"
+                style={{ padding: '5px 8px', fontSize: '12px' }}
+              />
+            </div>
+            <div>
+              <label className="ed-field-label">Columns</label>
+              <input
+                type="number"
+                min={1}
+                max={10}
+                value={newTableCols}
+                onChange={(e) =>
+                  setNewTableCols(parseInt(e.target.value || '3', 10))
+                }
+                className="ed-input"
+                style={{ padding: '5px 8px', fontSize: '12px' }}
+              />
+            </div>
+          </div>
+          <button
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() =>
+              handleInsertConfiguredTable(newTableRows, newTableCols)
+            }
+            className="btn-ed-primary"
+            style={{ width: '100%', padding: '7px 10px', fontSize: '10px' }}
+          >
+            Insert Table
+          </button>
+        </div>
+      )}
+
+      {/* =====================================================================
+          REQUIREMENT 11 & 13: FIXED OVERLAY DROPDOWN FOR SHAPES
+      ===================================================================== */}
+      {shapeMenuPos && (
+        <div
+          className="no-print"
+          style={{
+            position: 'fixed',
+            top: `${shapeMenuPos.top}px`,
+            left: `${shapeMenuPos.left}px`,
+            width: '215px',
+            backgroundColor: 'var(--bg-ivory)',
+            border: '1px solid var(--border-stone)',
+            boxShadow: '0 12px 28px rgba(10, 25, 78, 0.2)',
+            zIndex: 260,
+          }}
+        >
+          <div
+            style={{
+              padding: '8px 12px',
+              borderBottom: '1px solid var(--border-ivory)',
+              display: 'flex',
+              justifyContent: 'space-between',
+              alignItems: 'center',
+            }}
+          >
+            <span className="mono-label" style={{ fontSize: '9.5px' }}>
+              Select Shape to Draw
+            </span>
+            <button
+              onClick={() => setShapeMenuPos(null)}
+              style={{
+                background: 'none',
+                border: 'none',
+                cursor: 'pointer',
+                color: 'var(--ink-muted)',
+              }}
+            >
+              <X size={12} />
+            </button>
+          </div>
+          {SHAPE_OPTIONS.map((sh) => (
+            <button
+              key={sh.type}
+              onClick={() => {
+                setActiveShapeTool(sh.type);
+                setShapeMenuPos(null);
+              }}
+              style={{
+                width: '100%',
+                textAlign: 'left',
+                padding: '9px 12px',
+                border: 'none',
+                borderBottom: '1px solid var(--border-ivory)',
+                backgroundColor:
+                  activeShapeTool === sh.type
+                    ? 'var(--bg-stone)'
+                    : 'transparent',
+                color: 'var(--ink-navy)',
+                fontSize: '12.5px',
+                cursor: 'pointer',
+                display: 'flex',
+                justifyContent: 'space-between',
+              }}
+            >
+              <span>{sh.label}</span>
+              <span style={{ fontSize: '11px', color: 'var(--accent-blue)' }}>
+                Draw
+              </span>
+            </button>
+          ))}
+          {activeShapeTool !== 'select' && (
+            <button
+              onClick={() => {
+                setActiveShapeTool('select');
+                setShapeMenuPos(null);
+              }}
+              style={{
+                width: '100%',
+                padding: '8px 12px',
+                border: 'none',
+                backgroundColor: 'var(--bg-stone)',
+                color: 'var(--accent-terracotta)',
+                fontSize: '11.5px',
+                fontWeight: 600,
+                cursor: 'pointer',
+              }}
+            >
+              Cancel Drawing Mode
+            </button>
+          )}
+        </div>
+      )}
+
+      {/* =====================================================================
+          REQUIREMENT 10 & 12: SHAPE & IMAGE EDITING + LAYER POSITIONING BAR
+      ===================================================================== */}
+      <ElementLayerToolbar
+        selectedDrawing={selectedDrawingObj}
+        selectedImage={selectedImageObj}
+        onUpdateDrawing={(upd) => {
+          const next = drawings.map((d) =>
+            d.id === selectedDrawingId ? { ...d, ...upd } : d
+          );
+          setDrawings(next);
+          triggerAutoSave({ overrideDrawings: next });
+        }}
+        onUpdateImage={(upd) => {
+          const next = canvasImages.map((im) =>
+            im.id === selectedImageId ? { ...im, ...upd } : im
+          );
+          setCanvasImages(next);
+          triggerAutoSave({ overrideImages: next });
+        }}
+        onLayerAction={handleLayerAction}
+        onDelete={() => {
+          if (selectedDrawingId) {
+            const next = drawings.filter((d) => d.id !== selectedDrawingId);
+            setDrawings(next);
+            setSelectedDrawingId(null);
+            triggerAutoSave({ overrideDrawings: next });
+          } else if (selectedImageId) {
+            const next = canvasImages.filter((im) => im.id !== selectedImageId);
+            setCanvasImages(next);
+            setSelectedImageId(null);
+            triggerAutoSave({ overrideImages: next });
+          }
+        }}
+        onClose={() => {
+          setSelectedDrawingId(null);
+          setSelectedImageId(null);
+        }}
+      />
+
+      {/* =====================================================================
+          REQUIREMENT 13: CONTEXTUAL TABLE CONTROLS BAR & TOP-RIGHT FLOATING PILL
       ===================================================================== */}
       {isInsideTable && (
         <div
@@ -1864,7 +2352,7 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
             className="mono-label"
             style={{ fontSize: '9.5px', color: 'var(--accent-blue)' }}
           >
-            Table Controls:
+            Table Controls (or drag cell borders directly):
           </span>
           <button
             onMouseDown={(e) => e.preventDefault()}
@@ -1900,10 +2388,25 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
           </button>
           <button
             onMouseDown={(e) => e.preventDefault()}
+            onClick={() => modifyActiveTable('table-wider')}
+            className="btn-ed-subtle"
+            style={{ backgroundColor: 'var(--bg-ivory)', padding: '4px 7px' }}
+          >
+            Table Wider +
+          </button>
+          <button
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => modifyActiveTable('table-narrower')}
+            className="btn-ed-subtle"
+            style={{ backgroundColor: 'var(--bg-ivory)', padding: '4px 7px' }}
+          >
+            Table Narrower -
+          </button>
+          <button
+            onMouseDown={(e) => e.preventDefault()}
             onClick={() => modifyActiveTable('row-up')}
             className="btn-ed-subtle"
             style={{ backgroundColor: 'var(--bg-ivory)', padding: '4px 7px' }}
-            title="Move Row Up"
           >
             <ArrowUp size={11} /> Row
           </button>
@@ -1912,7 +2415,6 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
             onClick={() => modifyActiveTable('row-down')}
             className="btn-ed-subtle"
             style={{ backgroundColor: 'var(--bg-ivory)', padding: '4px 7px' }}
-            title="Move Row Down"
           >
             <ArrowDown size={11} /> Row
           </button>
@@ -1921,7 +2423,6 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
             onClick={() => modifyActiveTable('col-left')}
             className="btn-ed-subtle"
             style={{ backgroundColor: 'var(--bg-ivory)', padding: '4px 7px' }}
-            title="Move Column Left"
           >
             <ArrowLeftIcon size={11} /> Col
           </button>
@@ -1930,33 +2431,8 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
             onClick={() => modifyActiveTable('col-right')}
             className="btn-ed-subtle"
             style={{ backgroundColor: 'var(--bg-ivory)', padding: '4px 7px' }}
-            title="Move Column Right"
           >
             <ArrowRightIcon size={11} /> Col
-          </button>
-          <button
-            onMouseDown={(e) => e.preventDefault()}
-            onClick={() => modifyActiveTable('col-wider')}
-            className="btn-ed-subtle"
-            style={{ backgroundColor: 'var(--bg-ivory)', padding: '4px 7px' }}
-          >
-            Col Width +
-          </button>
-          <button
-            onMouseDown={(e) => e.preventDefault()}
-            onClick={() => modifyActiveTable('col-narrower')}
-            className="btn-ed-subtle"
-            style={{ backgroundColor: 'var(--bg-ivory)', padding: '4px 7px' }}
-          >
-            Col Width -
-          </button>
-          <button
-            onMouseDown={(e) => e.preventDefault()}
-            onClick={() => modifyActiveTable('row-taller')}
-            className="btn-ed-subtle"
-            style={{ backgroundColor: 'var(--bg-ivory)', padding: '4px 7px' }}
-          >
-            Row Height +
           </button>
           <button
             onMouseDown={(e) => e.preventDefault()}
@@ -1997,192 +2473,91 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
         </div>
       )}
 
-      {/* =====================================================================
-          SECTION 9B–C: DRAWING & SHAPES TOOLBAR (When Draw / Shapes is active)
-      ===================================================================== */}
-      {showDrawingBar && (
+      {/* Top-Right Floating Quick Table Controls when inside a Table (Requirement 13) */}
+      {isInsideTable && activeTableRect && (
         <div
           className="no-print"
           style={{
-            padding: '6px 18px',
-            backgroundColor: 'var(--bg-stone)',
-            borderBottom: '1px solid var(--border-stone)',
+            position: 'fixed',
+            top: `${Math.max(96, activeTableRect.top - 32)}px`,
+            left: `${Math.min(
+              window.innerWidth - 220,
+              activeTableRect.left + activeTableRect.width - 205
+            )}px`,
+            zIndex: 130,
+            backgroundColor: 'var(--bg-ivory)',
+            border: '1px solid var(--accent-blue)',
+            boxShadow: '0 4px 14px rgba(10, 25, 78, 0.16)',
             display: 'flex',
-            alignItems: 'center',
-            gap: '6px',
-            overflowX: 'auto',
-            flexShrink: 0,
+            gap: '4px',
+            padding: '3px 5px',
           }}
         >
-          <span
-            className="mono-label"
-            style={{ fontSize: '9.5px', color: 'var(--ink-navy)' }}
+          <button
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => modifyActiveTable('add-col-right')}
+            className="btn-ed-subtle"
+            style={{ padding: '2px 6px', fontSize: '9px' }}
           >
-            Shapes &amp; Drawing:
-          </span>
-
-          {(
-            [
-              ['select', 'Select / Move'],
-              ['line', 'Line'],
-              ['hline', 'Horiz. Line'],
-              ['vline', 'Vert. Line'],
-              ['arrow', 'Arrow'],
-              ['rect', 'Rectangle'],
-              ['square', 'Square'],
-              ['ellipse', 'Circle / Ellipse'],
-              ['freehand', 'Freehand'],
-            ] as const
-          ).map(([tool, label]) => (
-            <button
-              key={tool}
-              onClick={() => setActiveShapeTool(tool)}
-              className={
-                activeShapeTool === tool ? 'btn-ed-primary' : 'btn-ed-subtle'
-              }
-              style={{
-                padding: '4px 9px',
-                fontSize: '9.5px',
-                backgroundColor:
-                  activeShapeTool === tool ? undefined : 'var(--bg-ivory)',
-              }}
-            >
-              {label}
-            </button>
-          ))}
-
-          {/* Stroke Colour */}
-          <label
+            + Col
+          </button>
+          <button
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => modifyActiveTable('add-row-below')}
+            className="btn-ed-subtle"
+            style={{ padding: '2px 6px', fontSize: '9px' }}
+          >
+            + Row
+          </button>
+          <button
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => modifyActiveTable('del-col')}
             className="btn-ed-subtle"
             style={{
-              padding: '3px 7px',
-              backgroundColor: 'var(--bg-ivory)',
-              cursor: 'pointer',
+              padding: '2px 6px',
+              fontSize: '9px',
+              color: 'var(--accent-terracotta)',
             }}
-            title="Stroke Colour"
           >
-            <span style={{ fontSize: '9.5px' }}>Stroke</span>
-            <input
-              type="color"
-              value={strokeColor}
-              onChange={(e) => {
-                setStrokeColor(e.target.value);
-                if (selectedDrawingId) {
-                  const next = drawings.map((d) =>
-                    d.id === selectedDrawingId
-                      ? { ...d, strokeColor: e.target.value }
-                      : d
-                  );
-                  pushDrawingHistory(next);
-                }
-              }}
-              style={{
-                width: '14px',
-                height: '14px',
-                border: 'none',
-                padding: 0,
-              }}
-            />
-          </label>
-
-          {/* Stroke Thickness */}
-          <select
-            value={strokeWidth}
-            onChange={(e) => {
-              const w = parseInt(e.target.value, 10);
-              setStrokeWidth(w);
-              if (selectedDrawingId) {
-                const next = drawings.map((d) =>
-                  d.id === selectedDrawingId ? { ...d, strokeWidth: w } : d
-                );
-                pushDrawingHistory(next);
-              }
-            }}
-            className="ed-select"
-            style={{ width: '68px', padding: '3px 5px', fontSize: '11px' }}
-            title="Stroke Thickness"
-          >
-            <option value={1}>1 px</option>
-            <option value={2}>2 px</option>
-            <option value={3}>3 px</option>
-            <option value={5}>5 px</option>
-            <option value={8}>8 px</option>
-          </select>
-
-          {/* Line Style */}
-          <select
-            value={lineStyle}
-            onChange={(e) => {
-              const s = e.target.value as 'solid' | 'dashed' | 'dotted';
-              setLineStyle(s);
-              if (selectedDrawingId) {
-                const next = drawings.map((d) =>
-                  d.id === selectedDrawingId ? { ...d, lineStyle: s } : d
-                );
-                pushDrawingHistory(next);
-              }
-            }}
-            className="ed-select"
-            style={{ width: '78px', padding: '3px 5px', fontSize: '11px' }}
-          >
-            <option value="solid">Solid</option>
-            <option value="dashed">Dashed</option>
-            <option value="dotted">Dotted</option>
-          </select>
-
-          <button
-            onClick={handleUndoDrawing}
-            disabled={drawingUndoStack.length === 0}
-            className="btn-ed-subtle"
-            style={{ backgroundColor: 'var(--bg-ivory)', padding: '4px 7px' }}
-            title="Undo Drawing"
-          >
-            <Undo2 size={12} />
+            - Col
           </button>
           <button
-            onClick={handleRedoDrawing}
-            disabled={drawingRedoStack.length === 0}
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => modifyActiveTable('del-row')}
             className="btn-ed-subtle"
-            style={{ backgroundColor: 'var(--bg-ivory)', padding: '4px 7px' }}
-            title="Redo Drawing"
-          >
-            <Redo2 size={12} />
-          </button>
-
-          {selectedDrawingId && (
-            <button
-              onClick={handleDeleteSelectedDrawing}
-              className="btn-ed-subtle"
-              style={{
-                backgroundColor: 'var(--bg-ivory)',
-                color: 'var(--accent-terracotta)',
-                padding: '4px 8px',
-              }}
-            >
-              <Trash2 size={12} /> Delete Shape
-            </button>
-          )}
-
-          <button
-            onClick={() => {
-              setShowDrawingBar(false);
-              setActiveShapeTool('select');
+            style={{
+              padding: '2px 6px',
+              fontSize: '9px',
+              color: 'var(--accent-terracotta)',
             }}
-            className="btn-ed-subtle"
-            style={{ marginLeft: 'auto', padding: '4px 8px' }}
           >
-            Done
+            - Row
           </button>
         </div>
+      )}
+
+      {/* =====================================================================
+          REQUIREMENT 4: FLOATING TEXT-LEVEL AI ICON & SEPARATE POP-UP
+      ===================================================================== */}
+      {highlightedText && highlightBadgePos && (
+        <TextSelectionAIPopup
+          selectedText={highlightedText}
+          badgePosition={highlightBadgePos}
+          isOpen={showTextAiPopup}
+          onOpenPopup={() => setShowTextAiPopup(true)}
+          onClose={() => {
+            setShowTextAiPopup(false);
+            setHighlightedText('');
+            setHighlightBadgePos(null);
+          }}
+          onSubmitTextAI={handleExecuteTextLevelAI}
+        />
       )}
 
       {/* =====================================================================
           MAIN WORKSPACE BODY: [LEFT PAGE GROUPS] + [CENTER PAGES] + [RIGHT AI]
       ===================================================================== */}
       <div className="nc-workspace-body">
-        {/* ===================================================================
-            SECTION 10: LEFT-HAND PAGE GROUPING & SECTION NAVIGATOR
-        =================================================================== */}
         {showGroupsSidebar && (
           <aside className="nc-groups-sidebar no-print">
             <div
@@ -2227,7 +2602,6 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
                 gap: '14px',
               }}
             >
-              {/* Create New Group Box */}
               <div
                 style={{
                   padding: '10px',
@@ -2296,7 +2670,6 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
                 </button>
               </div>
 
-              {/* Existing Page Groups List */}
               <div
                 style={{
                   display: 'flex',
@@ -2308,197 +2681,178 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
                   Active Groups ({pageGroups.length})
                 </div>
 
-                {pageGroups.length === 0 ? (
-                  <p style={{ fontSize: '12px', color: 'var(--ink-muted)' }}>
-                    Select pages above to organise your document into named
-                    sections (e.g. Chapter One, Chapter Two, References).
-                  </p>
-                ) : (
-                  pageGroups.map((grp) => {
-                    const isEditing = editingGroupId === grp.id;
-                    return (
+                {pageGroups.map((grp) => {
+                  const isEditing = editingGroupId === grp.id;
+                  return (
+                    <div
+                      key={grp.id}
+                      style={{
+                        border: '1px solid var(--border-ivory)',
+                        backgroundColor: 'var(--bg-ivory)',
+                        padding: '8px 10px',
+                      }}
+                    >
                       <div
-                        key={grp.id}
                         style={{
-                          border: '1px solid var(--border-ivory)',
-                          backgroundColor: 'var(--bg-ivory)',
-                          padding: '8px 10px',
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'space-between',
+                          gap: '6px',
                         }}
                       >
-                        <div
+                        <button
+                          onClick={() => {
+                            const next = pageGroups.map((g) =>
+                              g.id === grp.id
+                                ? { ...g, collapsed: !g.collapsed }
+                                : g
+                            );
+                            setPageGroups(next);
+                          }}
                           style={{
+                            background: 'none',
+                            border: 'none',
                             display: 'flex',
                             alignItems: 'center',
-                            justifyContent: 'space-between',
-                            gap: '6px',
+                            gap: '4px',
+                            fontWeight: 700,
+                            fontSize: '12.5px',
+                            color: 'var(--ink-navy)',
+                            cursor: 'pointer',
+                            textAlign: 'left',
                           }}
                         >
+                          {grp.collapsed ? (
+                            <ChevronRight size={13} />
+                          ) : (
+                            <ChevronDown size={13} />
+                          )}
+                          <span>{grp.name}</span>
+                        </button>
+
+                        <div style={{ display: 'flex', gap: '4px' }}>
                           <button
                             onClick={() => {
-                              const next = pageGroups.map((g) =>
-                                g.id === grp.id
-                                  ? { ...g, collapsed: !g.collapsed }
-                                  : g
-                              );
-                              setPageGroups(next);
+                              setEditingGroupId(grp.id);
+                              setEditingGroupName(grp.name);
                             }}
                             style={{
                               background: 'none',
                               border: 'none',
-                              display: 'flex',
-                              alignItems: 'center',
-                              gap: '4px',
-                              fontWeight: 700,
-                              fontSize: '12.5px',
-                              color: 'var(--ink-navy)',
                               cursor: 'pointer',
-                              textAlign: 'left',
+                              color: 'var(--ink-muted)',
                             }}
                           >
-                            {grp.collapsed ? (
-                              <ChevronRight size={13} />
-                            ) : (
-                              <ChevronDown size={13} />
-                            )}
-                            <span>{grp.name}</span>
+                            <Edit3 size={12} />
                           </button>
-
-                          <div style={{ display: 'flex', gap: '4px' }}>
-                            <button
-                              onClick={() => {
-                                setEditingGroupId(grp.id);
-                                setEditingGroupName(grp.name);
-                              }}
-                              style={{
-                                background: 'none',
-                                border: 'none',
-                                cursor: 'pointer',
-                                color: 'var(--ink-muted)',
-                              }}
-                              title="Rename Group"
-                            >
-                              <Edit3 size={12} />
-                            </button>
-                            <button
-                              onClick={() => handleDeletePageGroup(grp.id)}
-                              style={{
-                                background: 'none',
-                                border: 'none',
-                                cursor: 'pointer',
-                                color: 'var(--accent-terracotta)',
-                              }}
-                              title="Ungroup"
-                            >
-                              <Trash2 size={12} />
-                            </button>
-                          </div>
+                          <button
+                            onClick={() => handleDeletePageGroup(grp.id)}
+                            style={{
+                              background: 'none',
+                              border: 'none',
+                              cursor: 'pointer',
+                              color: 'var(--accent-terracotta)',
+                            }}
+                          >
+                            <Trash2 size={12} />
+                          </button>
                         </div>
+                      </div>
 
-                        {isEditing && (
+                      {isEditing && (
+                        <div
+                          style={{
+                            display: 'flex',
+                            gap: '4px',
+                            marginTop: '6px',
+                          }}
+                        >
+                          <input
+                            type="text"
+                            value={editingGroupName}
+                            onChange={(e) =>
+                              setEditingGroupName(e.target.value)
+                            }
+                            className="ed-input"
+                            style={{ padding: '4px 6px', fontSize: '11.5px' }}
+                            autoFocus
+                          />
+                          <button
+                            onClick={() => handleCommitGroupRename(grp.id)}
+                            className="btn-ed-primary"
+                            style={{ padding: '4px 7px' }}
+                          >
+                            <Check size={11} />
+                          </button>
+                        </div>
+                      )}
+
+                      {!grp.collapsed && (
+                        <div style={{ marginTop: '8px' }}>
                           <div
                             style={{
                               display: 'flex',
+                              flexWrap: 'wrap',
                               gap: '4px',
-                              marginTop: '6px',
                             }}
                           >
-                            <input
-                              type="text"
-                              value={editingGroupName}
-                              onChange={(e) =>
-                                setEditingGroupName(e.target.value)
-                              }
-                              className="ed-input"
-                              style={{ padding: '4px 6px', fontSize: '11.5px' }}
-                              autoFocus
-                            />
-                            <button
-                              onClick={() => handleCommitGroupRename(grp.id)}
-                              className="btn-ed-primary"
-                              style={{ padding: '4px 7px' }}
-                            >
-                              <Check size={11} />
-                            </button>
+                            {pages.map((_, pIdx) => {
+                              const inGroup = grp.pageIndices.includes(pIdx);
+                              return (
+                                <button
+                                  key={pIdx}
+                                  onClick={() =>
+                                    handleTogglePageInGroup(grp.id, pIdx)
+                                  }
+                                  style={{
+                                    padding: '2px 6px',
+                                    fontSize: '10px',
+                                    border: '1px solid var(--border-ivory)',
+                                    backgroundColor: inGroup
+                                      ? 'var(--bg-stone)'
+                                      : 'transparent',
+                                    color: inGroup
+                                      ? 'var(--accent-blue)'
+                                      : 'var(--ink-muted)',
+                                    fontWeight: inGroup ? 700 : 400,
+                                    cursor: 'pointer',
+                                  }}
+                                >
+                                  P.{pIdx + 1}
+                                </button>
+                              );
+                            })}
                           </div>
-                        )}
-
-                        {!grp.collapsed && (
-                          <div style={{ marginTop: '8px' }}>
-                            <div
-                              style={{
-                                fontSize: '11px',
-                                color: 'var(--ink-muted)',
-                                marginBottom: '6px',
-                              }}
-                            >
-                              Pages:{' '}
-                              {grp.pageIndices.map((p) => p + 1).join(', ') ||
-                                'None'}
-                            </div>
-                            <div
-                              style={{
-                                display: 'flex',
-                                flexWrap: 'wrap',
-                                gap: '4px',
-                              }}
-                            >
-                              {pages.map((_, pIdx) => {
-                                const inGroup = grp.pageIndices.includes(pIdx);
-                                return (
-                                  <button
-                                    key={pIdx}
-                                    onClick={() =>
-                                      handleTogglePageInGroup(grp.id, pIdx)
-                                    }
-                                    style={{
-                                      padding: '2px 6px',
-                                      fontSize: '10px',
-                                      border: '1px solid var(--border-ivory)',
-                                      backgroundColor: inGroup
-                                        ? 'var(--bg-stone)'
-                                        : 'transparent',
-                                      color: inGroup
-                                        ? 'var(--accent-blue)'
-                                        : 'var(--ink-muted)',
-                                      fontWeight: inGroup ? 700 : 400,
-                                      cursor: 'pointer',
-                                    }}
-                                    title="Click to add/remove page from this group"
-                                  >
-                                    P.{pIdx + 1}
-                                  </button>
-                                );
-                              })}
-                            </div>
-                            <button
-                              onClick={() => {
-                                setAiTargetGroupId(grp.id);
-                                setShowAiPanel(true);
-                              }}
-                              className="btn-ed-subtle"
-                              style={{
-                                width: '100%',
-                                marginTop: '8px',
-                                padding: '4px 8px',
-                                fontSize: '9.5px',
-                              }}
-                            >
-                              <Sparkles size={10} color="var(--accent-blue)" />{' '}
-                              Focus AI on {grp.name}
-                            </button>
-                          </div>
-                        )}
-                      </div>
-                    );
-                  })
-                )}
+                          <button
+                            onClick={() => {
+                              setMainAiScope('group');
+                              setAiTargetGroupId(grp.id);
+                              setAiGroupPageSelection('all');
+                              setShowAiPanel(true);
+                            }}
+                            className="btn-ed-subtle"
+                            style={{
+                              width: '100%',
+                              marginTop: '8px',
+                              padding: '4px 8px',
+                              fontSize: '9.5px',
+                            }}
+                          >
+                            <Sparkles size={10} color="var(--accent-blue)" />{' '}
+                            Select in Main AI Assistant
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
               </div>
             </div>
           </aside>
         )}
 
         {/* ===================================================================
-            5.2 MULTI-PAGE DOCUMENT EDITOR CANVAS
+            MULTI-PAGE DOCUMENT EDITOR CANVAS
         =================================================================== */}
         <div className="doc-workspace-canvas-wrap" style={{ flex: 1 }}>
           {pages.map((_, pageIdx) => {
@@ -2509,11 +2863,20 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
             const pageDrawings = drawings.filter(
               (d) => d.pageIndex === pageIdx
             );
+            const pageImages = canvasImages.filter(
+              (im) => im.pageIndex === pageIdx
+            );
 
             return (
               <div
                 key={pageIdx}
                 className="doc-a4-page"
+                onDragOver={(e) => e.preventDefault()}
+                onDrop={(e) => handlePageDrop(pageIdx, e)}
+                onMouseMove={(e) => handleCanvasPointerMove(pageIdx, e)}
+                onMouseUp={handleCanvasPointerUp}
+                onTouchMove={(e) => handleCanvasPointerMove(pageIdx, e)}
+                onTouchEnd={handleCanvasPointerUp}
                 style={{
                   width: `${dim.widthPx}px`,
                   minHeight: `${dim.heightPx}px`,
@@ -2528,7 +2891,7 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
                   }", Georgia, serif`,
                 }}
               >
-                {/* Page Running Header + Section Group Badge */}
+                {/* Page Running Header + Dedicated Page-Level AI Icon (Requirement 5) */}
                 <div
                   style={{
                     borderBottom: '1px solid #E2E8F0',
@@ -2541,12 +2904,21 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
                     justifyContent: 'space-between',
                     gap: '8px',
                     userSelect: 'none',
+                    position: 'relative',
+                    zIndex: 25,
                   }}
                 >
                   <span>
-                    {doc.metadata.headerText || title.slice(0, 48).toUpperCase()}
+                    {doc.metadata.headerText || title.slice(0, 44).toUpperCase()}
                   </span>
-                  <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+                  <div
+                    style={{
+                      display: 'flex',
+                      gap: '6px',
+                      alignItems: 'center',
+                      flexWrap: 'wrap',
+                    }}
+                  >
                     {belongingGroups.map((g) => (
                       <span
                         key={g.id}
@@ -2562,37 +2934,170 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
                         {g.name}
                       </span>
                     ))}
+
+                    {/* Requirement 5: Dedicated Page-Level AI Editing Button at the Top of Every Page */}
+                    <button
+                      type="button"
+                      className="no-print"
+                      onClick={() =>
+                        setActivePageAiIdx((prev) =>
+                          prev === pageIdx ? null : pageIdx
+                        )
+                      }
+                      title={`Open AI Editor for Page ${pageIdx + 1}`}
+                      style={{
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: '4px',
+                        padding: '2px 8px',
+                        backgroundColor:
+                          activePageAiIdx === pageIdx ? '#1447E6' : '#EEF2FF',
+                        color:
+                          activePageAiIdx === pageIdx ? '#FFFFFF' : '#1447E6',
+                        border: '1px solid #1447E6',
+                        fontFamily: 'var(--font-mono)',
+                        fontSize: '9px',
+                        fontWeight: 600,
+                        cursor: 'pointer',
+                      }}
+                    >
+                      <Sparkles size={11} />
+                      <span>Page {pageIdx + 1} AI</span>
+                    </button>
+
                     <span>Page {pageIdx + 1}</span>
                   </div>
                 </div>
 
-                {/* Interactive Vector Drawing Layer for this Page (Section 9B–D) */}
-                {(pageDrawings.length > 0 || showDrawingBar) && (
+                {/* Requirement 5: Dedicated Page-Level AI Interface when clicked */}
+                {activePageAiIdx === pageIdx && (
+                  <PageLevelAIPopover
+                    pageIndex={pageIdx}
+                    onClose={() => setActivePageAiIdx(null)}
+                    onApplyPageAI={handleExecutePageLevelAI}
+                  />
+                )}
+
+                {/* Requirement 10: Movable & Resizable Canvas Images on this Page */}
+                {pageImages.map((img) => {
+                  const isSel = selectedImageId === img.id;
+                  return (
+                    <div
+                      key={img.id}
+                      onMouseDown={(e) => {
+                        e.stopPropagation();
+                        setSelectedImageId(img.id);
+                        setSelectedDrawingId(null);
+                        const pageEl = e.currentTarget.parentElement;
+                        if (!pageEl) return;
+                        const { x, y } = getPageRelativeCoords(pageEl, e);
+                        setDragState({
+                          targetKind: 'image',
+                          mode: 'move',
+                          id: img.id,
+                          pageIdx,
+                          startX: x,
+                          startY: y,
+                          origX1: img.x,
+                          origY1: img.y,
+                          origX2: img.x + img.width,
+                          origY2: img.y + img.height,
+                          aspectRatio: img.aspectRatio,
+                        });
+                      }}
+                      style={{
+                        position: 'absolute',
+                        left: `${img.x}px`,
+                        top: `${img.y}px`,
+                        width: `${img.width}px`,
+                        height: `${img.height}px`,
+                        zIndex: img.zIndex ?? 12,
+                        border: isSel
+                          ? '2px solid #1447E6'
+                          : '1px solid transparent',
+                        cursor: 'move',
+                        userSelect: 'none',
+                      }}
+                    >
+                      <img
+                        src={img.src}
+                        alt={img.caption || 'Document Figure'}
+                        draggable={false}
+                        style={{
+                          width: '100%',
+                          height: '100%',
+                          objectFit: 'fill',
+                          display: 'block',
+                          pointerEvents: 'none',
+                        }}
+                      />
+
+                      {/* 8 Resize Handles: Corners (maintain aspect ratio) + Sides (independent W/H) */}
+                      {isSel &&
+                        (
+                          [
+                            ['resize-nw', { top: -5, left: -5, cursor: 'nwse-resize' }],
+                            ['resize-ne', { top: -5, right: -5, cursor: 'nesw-resize' }],
+                            ['resize-sw', { bottom: -5, left: -5, cursor: 'nesw-resize' }],
+                            ['resize-se', { bottom: -5, right: -5, cursor: 'nwse-resize' }],
+                            ['resize-n', { top: -5, left: 'calc(50% - 5px)', cursor: 'ns-resize' }],
+                            ['resize-s', { bottom: -5, left: 'calc(50% - 5px)', cursor: 'ns-resize' }],
+                            ['resize-w', { top: 'calc(50% - 5px)', left: -5, cursor: 'ew-resize' }],
+                            ['resize-e', { top: 'calc(50% - 5px)', right: -5, cursor: 'ew-resize' }],
+                          ] as const
+                        ).map(([mode, posStyle]) => (
+                          <span
+                            key={mode}
+                            onMouseDown={(e) => {
+                              e.stopPropagation();
+                              const pageEl =
+                                e.currentTarget.parentElement?.parentElement;
+                              if (!pageEl) return;
+                              const { x, y } = getPageRelativeCoords(pageEl, e);
+                              setDragState({
+                                targetKind: 'image',
+                                mode,
+                                id: img.id,
+                                pageIdx,
+                                startX: x,
+                                startY: y,
+                                origX1: img.x,
+                                origY1: img.y,
+                                origX2: img.x + img.width,
+                                origY2: img.y + img.height,
+                                aspectRatio: img.aspectRatio,
+                              });
+                            }}
+                            style={{
+                              position: 'absolute',
+                              width: '10px',
+                              height: '10px',
+                              backgroundColor: '#FFFFFF',
+                              border: '2px solid #1447E6',
+                              ...posStyle,
+                            }}
+                          />
+                        ))}
+                    </div>
+                  );
+                })}
+
+                {/* Requirement 11 & 12: Unrestricted Full-Page Vector Shape Layer (Figma-style anywhere on page) */}
+                {(pageDrawings.length > 0 || activeShapeTool !== 'select') && (
                   <svg
                     width="100%"
-                    height={showDrawingBar ? 190 : 150}
+                    height="100%"
                     style={{
-                      border: showDrawingBar
-                        ? '1px dashed rgba(20, 71, 230, 0.45)'
-                        : 'none',
-                      backgroundColor: showDrawingBar
-                        ? 'rgba(20, 71, 230, 0.02)'
-                        : 'transparent',
-                      marginBottom: '12px',
-                       cursor:
-                        showDrawingBar && activeShapeTool !== 'select'
-                          ? 'crosshair'
-                          : 'default',
-                      touchAction: showDrawingBar ? 'none' : 'auto',
-                      display: 'block',
-                      zIndex: 5,
+                      position: 'absolute',
+                      inset: 0,
+                      pointerEvents:
+                        activeShapeTool !== 'select' ? 'auto' : 'none',
+                      cursor:
+                        activeShapeTool !== 'select' ? 'crosshair' : 'default',
+                      zIndex: 18,
                     }}
-                    onMouseDown={(e) => handlePagePointerDown(pageIdx, e)}
-                    onMouseMove={(e) => handlePagePointerMove(pageIdx, e)}
-                    onMouseUp={handlePagePointerUp}
-                    onTouchStart={(e) => handlePagePointerDown(pageIdx, e)}
-                    onTouchMove={(e) => handlePagePointerMove(pageIdx, e)}
-                    onTouchEnd={handlePagePointerUp}
+                    onMouseDown={(e) => handleStartCanvasShapeDraw(pageIdx, e)}
+                    onTouchStart={(e) => handleStartCanvasShapeDraw(pageIdx, e)}
                   >
                     <defs>
                       <marker
@@ -2607,19 +3112,6 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
                       </marker>
                     </defs>
 
-                    {showDrawingBar && pageDrawings.length === 0 && (
-                      <text
-                        x="12"
-                        y="24"
-                        fill="#64748B"
-                        fontSize="11"
-                        fontFamily="sans-serif"
-                      >
-                        Click and drag here to draw shapes, lines or arrows on
-                        Page {pageIdx + 1}...
-                      </text>
-                    )}
-
                     {pageDrawings.map((d) => {
                       const isSel = selectedDrawingId === d.id;
                       const dash =
@@ -2628,6 +3120,10 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
                           : d.lineStyle === 'dotted'
                           ? '2,3'
                           : undefined;
+                      const fill =
+                        d.fillColor && d.fillColor !== 'transparent'
+                          ? d.fillColor
+                          : 'transparent';
                       const x = Math.min(d.x1, d.x2);
                       const y = Math.min(d.y1, d.y2);
                       const w = Math.max(4, Math.abs(d.x2 - d.x1));
@@ -2636,26 +3132,31 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
                       return (
                         <g
                           key={d.id}
+                          style={{
+                            pointerEvents: 'all',
+                            cursor: 'move',
+                          }}
                           onMouseDown={(e) => {
                             e.stopPropagation();
                             setSelectedDrawingId(d.id);
-                            setShowDrawingBar(true);
-                            const svgRect =
-                              e.currentTarget.ownerSVGElement?.getBoundingClientRect();
-                            if (!svgRect) return;
+                            setSelectedImageId(null);
+                            const pageEl =
+                              e.currentTarget.ownerSVGElement?.parentElement;
+                            if (!pageEl) return;
+                            const coords = getPageRelativeCoords(pageEl, e);
                             setDragState({
+                              targetKind: 'shape',
                               mode: 'move',
-                              drawingId: d.id,
+                              id: d.id,
                               pageIdx,
-                              startX: Math.round(e.clientX - svgRect.left),
-                              startY: Math.round(e.clientY - svgRect.top),
+                              startX: coords.x,
+                              startY: coords.y,
                               origX1: d.x1,
                               origY1: d.y1,
                               origX2: d.x2,
                               origY2: d.y2,
                             });
                           }}
-                          style={{ cursor: 'move' }}
                         >
                           {(d.type === 'rect' || d.type === 'square') && (
                             <rect
@@ -2663,7 +3164,7 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
                               y={y}
                               width={w}
                               height={h}
-                              fill="transparent"
+                              fill={fill}
                               stroke={d.strokeColor}
                               strokeWidth={d.strokeWidth}
                               strokeDasharray={dash}
@@ -2676,7 +3177,31 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
                               cy={y + h / 2}
                               rx={w / 2}
                               ry={h / 2}
-                              fill="transparent"
+                              fill={fill}
+                              stroke={d.strokeColor}
+                              strokeWidth={d.strokeWidth}
+                              strokeDasharray={dash}
+                            />
+                          )}
+
+                          {d.type === 'triangle' && (
+                            <polygon
+                              points={`${x + w / 2},${y} ${x + w},${y + h} ${x},${
+                                y + h
+                              }`}
+                              fill={fill}
+                              stroke={d.strokeColor}
+                              strokeWidth={d.strokeWidth}
+                              strokeDasharray={dash}
+                            />
+                          )}
+
+                          {d.type === 'diamond' && (
+                            <polygon
+                              points={`${x + w / 2},${y} ${x + w},${
+                                y + h / 2
+                              } ${x + w / 2},${y + h} ${x},${y + h / 2}`}
+                              fill={fill}
                               stroke={d.strokeColor}
                               strokeWidth={d.strokeWidth}
                               strokeDasharray={dash}
@@ -2710,7 +3235,7 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
                               x2={d.x2}
                               y2={d.y2}
                               stroke={d.strokeColor}
-                              strokeWidth={d.strokeWidth}
+                              strokeWidth={Math.max(3, d.strokeWidth)}
                               strokeDasharray={dash}
                               markerEnd={
                                 d.type === 'arrow'
@@ -2720,28 +3245,33 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
                             />
                           )}
 
-                          {/* Selection Handles for Resizing */}
                           {isSel && (
                             <>
                               <circle
                                 cx={d.x1}
                                 cy={d.y1}
-                                r={5}
+                                r={6}
                                 fill="#FFFFFF"
                                 stroke="#1447E6"
                                 strokeWidth={2}
                                 style={{ cursor: 'nwse-resize' }}
                                 onMouseDown={(e) => {
                                   e.stopPropagation();
-                                  const svgRect =
-                                    e.currentTarget.ownerSVGElement?.getBoundingClientRect();
-                                  if (!svgRect) return;
+                                  const pageEl =
+                                    e.currentTarget.ownerSVGElement
+                                      ?.parentElement;
+                                  if (!pageEl) return;
+                                  const coords = getPageRelativeCoords(
+                                    pageEl,
+                                    e
+                                  );
                                   setDragState({
-                                    mode: 'resize-start',
-                                    drawingId: d.id,
+                                    targetKind: 'shape',
+                                    mode: 'resize-nw',
+                                    id: d.id,
                                     pageIdx,
-                                    startX: Math.round(e.clientX - svgRect.left),
-                                    startY: Math.round(e.clientY - svgRect.top),
+                                    startX: coords.x,
+                                    startY: coords.y,
                                     origX1: d.x1,
                                     origY1: d.y1,
                                     origX2: d.x2,
@@ -2752,22 +3282,28 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
                               <circle
                                 cx={d.x2}
                                 cy={d.y2}
-                                r={5}
+                                r={6}
                                 fill="#FFFFFF"
                                 stroke="#1447E6"
                                 strokeWidth={2}
                                 style={{ cursor: 'nwse-resize' }}
                                 onMouseDown={(e) => {
                                   e.stopPropagation();
-                                  const svgRect =
-                                    e.currentTarget.ownerSVGElement?.getBoundingClientRect();
-                                  if (!svgRect) return;
+                                  const pageEl =
+                                    e.currentTarget.ownerSVGElement
+                                      ?.parentElement;
+                                  if (!pageEl) return;
+                                  const coords = getPageRelativeCoords(
+                                    pageEl,
+                                    e
+                                  );
                                   setDragState({
-                                    mode: 'resize-end',
-                                    drawingId: d.id,
+                                    targetKind: 'shape',
+                                    mode: 'resize-se',
+                                    id: d.id,
                                     pageIdx,
-                                    startX: Math.round(e.clientX - svgRect.left),
-                                    startY: Math.round(e.clientY - svgRect.top),
+                                    startX: coords.x,
+                                    startY: coords.y,
                                     origX1: d.x1,
                                     origY1: d.y1,
                                     origX2: d.x2,
@@ -2795,7 +3331,16 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
                   }}
                   onClick={(e) => handlePageSelection(pageIdx, e)}
                   onInput={() => checkAndFlowPages(pageIdx)}
-                  onMouseUp={(e) => handlePageSelection(pageIdx, e)}
+                  onMouseDown={(e) =>
+                    handlePageMouseDownForTableResize(pageIdx, e)
+                  }
+                  onMouseMove={(e) =>
+                    handlePageMouseMoveForTableResize(pageIdx, e)
+                  }
+                  onMouseUp={(e) => {
+                    handlePageMouseUpForTableResize();
+                    handlePageSelection(pageIdx, e);
+                  }}
                   onKeyUp={(e) => handlePageSelection(pageIdx, e)}
                   className="doc-editable-body"
                   style={{
@@ -2827,7 +3372,6 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
             );
           })}
 
-          {/* Bottom Add Page Button on Canvas */}
           <button
             onClick={handleAddBlankPage}
             className="btn-ed-outline no-print"
@@ -2888,14 +3432,11 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
         </div>
 
         {/* ===================================================================
-            6. & 11. AI ASSISTANT PANEL (With Page Groups & Selection Context)
+            REQUIREMENT 6, 7, 8, 9: MAIN AI ASSISTANT PANEL
+            (Dedicated to Entire Document, Selected Group + Group Pages, or Individual Page)
         =================================================================== */}
         {showAiPanel && (
-          <aside
-            className="nc-ai-panel no-print"
-            onMouseDown={applyVisualSelectionLock}
-          >
-            {/* Simple Header Labelled "AI Assistant" */}
+          <aside className="nc-ai-panel no-print">
             <div
               style={{
                 height: '44px',
@@ -2930,52 +3471,196 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
                   cursor: 'pointer',
                   display: 'flex',
                 }}
-                title="Close AI Assistant"
               >
                 <X size={14} />
               </button>
             </div>
 
-            {/* Section 11: Page Group Context Selector (When Page Groups exist) */}
-            {pageGroups.length > 0 && (
+            {/* Requirement 6: Granular Focus Scope Selector (Entire Document | Selected Group + Pages | Selected Page) */}
+            <div
+              style={{
+                padding: '10px 14px',
+                borderBottom: '1px solid var(--border-ivory)',
+                backgroundColor: 'var(--bg-stone)',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: '8px',
+              }}
+            >
               <div
                 style={{
-                  padding: '8px 14px',
-                  borderBottom: '1px solid var(--border-ivory)',
-                  backgroundColor: 'var(--bg-stone)',
                   display: 'flex',
                   alignItems: 'center',
                   justifyContent: 'space-between',
-                  gap: '8px',
                 }}
               >
                 <span
                   className="mono-label"
                   style={{ fontSize: '9.5px', color: 'var(--ink-muted)' }}
                 >
-                  Focus Scope:
+                  AI Editing Scope:
                 </span>
-                <select
-                  value={aiTargetGroupId}
-                  onChange={(e) => setAiTargetGroupId(e.target.value)}
-                  className="ed-select"
+                <div style={{ display: 'flex', gap: '4px' }}>
+                  {(
+                    [
+                      ['document', 'Entire Doc'],
+                      ['group', 'Group'],
+                      ['page', 'Single Page'],
+                    ] as const
+                  ).map(([scopeKey, label]) => (
+                    <button
+                      key={scopeKey}
+                      type="button"
+                      onClick={() => {
+                        setMainAiScope(scopeKey);
+                        if (
+                          scopeKey === 'group' &&
+                          !aiTargetGroupId &&
+                          pageGroups[0]
+                        ) {
+                          setAiTargetGroupId(pageGroups[0].id);
+                        }
+                      }}
+                      className={
+                        mainAiScope === scopeKey
+                          ? 'btn-ed-primary'
+                          : 'btn-ed-subtle'
+                      }
+                      style={{ padding: '3px 7px', fontSize: '9px' }}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Group Scope Details: Select Group + Select All Pages in Group OR Specific Page in Group */}
+              {mainAiScope === 'group' && (
+                <div
                   style={{
-                    padding: '4px 8px',
-                    fontSize: '11.5px',
-                    flex: 1,
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: '6px',
                   }}
                 >
-                  <option value="">Entire Document / Selection</option>
-                  {pageGroups.map((g) => (
-                    <option key={g.id} value={g.id}>
-                      {g.name} (P.{g.pageIndices.map((i) => i + 1).join(',')})
-                    </option>
-                  ))}
-                </select>
-              </div>
-            )}
+                  {pageGroups.length === 0 ? (
+                    <span
+                      style={{ fontSize: '11.5px', color: 'var(--ink-muted)' }}
+                    >
+                      No groups created yet. Use "Group Pages" in the toolbar.
+                    </span>
+                  ) : (
+                    <>
+                      <select
+                        value={aiTargetGroupId}
+                        onChange={(e) => {
+                          setAiTargetGroupId(e.target.value);
+                          setAiGroupPageSelection('all');
+                        }}
+                        className="ed-select"
+                        style={{ padding: '5px 8px', fontSize: '11.5px' }}
+                      >
+                        {pageGroups.map((g) => (
+                          <option key={g.id} value={g.id}>
+                            {g.name} (Pages{' '}
+                            {g.pageIndices.map((i) => i + 1).join(', ')})
+                          </option>
+                        ))}
+                      </select>
 
-            {/* Clean Conversation Area */}
+                      {activeGroupObj && (
+                        <div>
+                          <div
+                            className="mono-label"
+                            style={{
+                              fontSize: '8.5px',
+                              color: 'var(--ink-muted)',
+                              marginBottom: '4px',
+                            }}
+                          >
+                            Target Pages in {activeGroupObj.name}:
+                          </div>
+                          <div
+                            style={{
+                              display: 'flex',
+                              flexWrap: 'wrap',
+                              gap: '4px',
+                            }}
+                          >
+                            <button
+                              type="button"
+                              onClick={() => setAiGroupPageSelection('all')}
+                              className={
+                                aiGroupPageSelection === 'all'
+                                  ? 'btn-ed-primary'
+                                  : 'btn-ed-subtle'
+                              }
+                              style={{ padding: '3px 7px', fontSize: '9px' }}
+                            >
+                              All Group Pages (
+                              {activeGroupObj.pageIndices
+                                .map((i) => i + 1)
+                                .join(', ')}
+                              )
+                            </button>
+                            {activeGroupObj.pageIndices.map((pIdx) => (
+                              <button
+                                key={pIdx}
+                                type="button"
+                                onClick={() => setAiGroupPageSelection(pIdx)}
+                                className={
+                                  aiGroupPageSelection === pIdx
+                                    ? 'btn-ed-primary'
+                                    : 'btn-ed-subtle'
+                                }
+                                style={{ padding: '3px 7px', fontSize: '9px' }}
+                              >
+                                Only Page {pIdx + 1}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </>
+                  )}
+                </div>
+              )}
+
+              {/* Single Page Scope Selector */}
+              {mainAiScope === 'page' && (
+                <div
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '6px',
+                    flexWrap: 'wrap',
+                  }}
+                >
+                  <span
+                    style={{ fontSize: '11px', color: 'var(--ink-muted)' }}
+                  >
+                    Select Page:
+                  </span>
+                  {pages.map((_, idx) => (
+                    <button
+                      key={idx}
+                      type="button"
+                      onClick={() => setAiTargetSinglePage(idx)}
+                      className={
+                        aiTargetSinglePage === idx
+                          ? 'btn-ed-primary'
+                          : 'btn-ed-subtle'
+                      }
+                      style={{ padding: '3px 8px', fontSize: '9.5px' }}
+                    >
+                      Page {idx + 1}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* Conversation History */}
             <div
               style={{
                 flex: 1,
@@ -2989,7 +3674,7 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
               {doc.aiHistory.length === 0 && (
                 <div
                   style={{
-                    fontSize: '12.5px',
+                    fontSize: '12px',
                     color: 'var(--ink-muted)',
                     lineHeight: 1.5,
                     padding: '12px',
@@ -2997,9 +3682,10 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
                     backgroundColor: 'var(--bg-stone)',
                   }}
                 >
-                  Highlight text in the document, select a Page Group above, or
-                  enter an instruction below (e.g.{' '}
-                  <em>"Rewrite Chapter One in a more academic tone"</em>).
+                  Select your target scope above (<strong>Entire Doc</strong>,{' '}
+                  <strong>Group</strong>, or <strong>Single Page</strong>),
+                  attach optional reference documents/images, and instruct AI to
+                  update your document directly.
                 </div>
               )}
 
@@ -3033,7 +3719,9 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
                             : 'var(--accent-blue)',
                       }}
                     >
-                      {msg.role === 'user' ? 'Instruction' : 'AI Response'}
+                      {msg.role === 'user'
+                        ? 'Instruction'
+                        : 'Applied to Workspace'}
                     </span>
 
                     {msg.targetGroupName && (
@@ -3052,103 +3740,33 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
                   </div>
 
                   {msg.role === 'user' ? (
-                    <div style={{ fontSize: '12.5px', color: 'var(--ink-navy)' }}>
-                      {msg.prompt}
-                    </div>
-                  ) : (
                     <div>
                       <div
-                        style={{
-                          fontSize: '12px',
-                          color: 'var(--ink-muted)',
-                          marginBottom: '8px',
-                        }}
+                        style={{ fontSize: '12.5px', color: 'var(--ink-navy)' }}
                       >
-                        {msg.summary}
+                        {msg.prompt}
                       </div>
-
-                      {msg.generatedHtml && (
-                        <>
-                          <div
-                            style={{
-                              padding: '9px',
-                              backgroundColor: '#FFFFFF',
-                              border: '1px solid var(--border-ivory)',
-                              maxHeight: '150px',
-                              overflowY: 'auto',
-                              fontSize: '11.5px',
-                              color: '#1E293B',
-                              lineHeight: 1.45,
-                            }}
-                            dangerouslySetInnerHTML={{
-                              __html: msg.generatedHtml,
-                            }}
-                          />
-
-                          <div
-                            style={{
-                              display: 'grid',
-                              gridTemplateColumns: '1fr 1fr',
-                              gap: '5px',
-                              marginTop: '8px',
-                            }}
-                          >
-                            {msg.targetGroupId ? (
-                              <button
-                                onClick={() =>
-                                  handleApplyAiContent(msg, 'group')
-                                }
-                                className="btn-ed-primary"
-                                style={{
-                                  gridColumn: '1 / -1',
-                                  padding: '6px 8px',
-                                  fontSize: '9.5px',
-                                }}
-                              >
-                                Apply to {msg.targetGroupName} Only
-                              </button>
-                            ) : null}
-
-                            <button
-                              onClick={() =>
-                                handleApplyAiContent(msg, 'replace')
-                              }
-                              className="btn-ed-primary"
-                              style={{ padding: '5px 7px', fontSize: '9px' }}
-                            >
-                              Replace selected
-                            </button>
-
-                            <button
-                              onClick={() => handleApplyAiContent(msg, 'below')}
-                              className="btn-ed-subtle"
-                              style={{ padding: '5px 7px', fontSize: '9px' }}
-                            >
-                              Insert below
-                            </button>
-
-                            <button
-                              onClick={() =>
-                                handleApplyAiContent(msg, 'cursor')
-                              }
-                              className="btn-ed-subtle"
-                              style={{ padding: '5px 7px', fontSize: '9px' }}
-                            >
-                              Insert at cursor
-                            </button>
-
-                            <button
-                              onClick={() =>
-                                handleApplyAiContent(msg, 'append')
-                              }
-                              className="btn-ed-subtle"
-                              style={{ padding: '5px 7px', fontSize: '9px' }}
-                            >
-                              Append to doc
-                            </button>
-                          </div>
-                        </>
+                      {msg.attachments && msg.attachments.length > 0 && (
+                        <div
+                          style={{
+                            marginTop: '4px',
+                            fontSize: '10.5px',
+                            color: 'var(--accent-blue)',
+                          }}
+                        >
+                          Attached: {msg.attachments.join(', ')}
+                        </div>
                       )}
+                    </div>
+                  ) : (
+                    <div
+                      style={{
+                        fontSize: '12px',
+                        color: 'var(--ink-body)',
+                        lineHeight: 1.45,
+                      }}
+                    >
+                      ✓ {msg.summary}
                     </div>
                   )}
                 </div>
@@ -3163,92 +3781,53 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
                     color: 'var(--accent-blue)',
                   }}
                 >
-                  Generating response...
+                  Applying changes directly to workspace...
                 </div>
               )}
             </div>
 
-            {/* Bottom Input Section with Persistent Selected Text Indicator */}
+            {/* Requirement 7, 8, 9: Auto-Expanding Input + Document/Image Uploads + Voice-to-Text */}
             <div
               style={{
                 padding: '12px 14px',
                 borderTop: '1px solid var(--border-ivory)',
                 backgroundColor: 'var(--bg-stone)',
-                display: 'flex',
-                flexDirection: 'column',
-                gap: '8px',
               }}
             >
-              {selectedText && (
-                <div
-                  style={{
-                    padding: '7px 10px',
-                    backgroundColor: 'var(--bg-ivory)',
-                    border: '1px solid var(--accent-blue)',
-                    display: 'flex',
-                    alignItems: 'flex-start',
-                    justifyContent: 'space-between',
-                    gap: '8px',
-                  }}
-                >
-                  <div style={{ minWidth: 0 }}>
-                    <div
-                      className="mono-label"
-                      style={{
-                        fontSize: '8.5px',
-                        color: 'var(--accent-blue)',
-                        marginBottom: '2px',
-                      }}
-                    >
-                      Selected text
-                    </div>
-                    <div
-                      style={{
-                        fontSize: '11.5px',
-                        color: 'var(--ink-navy)',
-                        fontStyle: 'italic',
-                        overflow: 'hidden',
-                        textOverflow: 'ellipsis',
-                        whiteSpace: 'nowrap',
-                      }}
-                    >
-                      "{truncatedSelection}"
-                    </div>
-                  </div>
-
-                  <button
-                    onClick={handleClearSelection}
-                    style={{
-                      background: 'none',
-                      border: 'none',
-                      color: 'var(--ink-muted)',
-                      cursor: 'pointer',
-                      padding: '2px',
-                    }}
-                    title="Clear selection"
-                  >
-                    <X size={12} />
-                  </button>
-                </div>
-              )}
-
-              <div style={{ display: 'flex', gap: '6px' }}>
+              <div
+                style={{
+                  border: isMainAiRecording
+                    ? '2px solid #16A34A'
+                    : '1px solid var(--border-stone)',
+                  backgroundColor: isMainAiRecording
+                    ? 'rgba(22, 163, 74, 0.05)'
+                    : 'var(--bg-ivory)',
+                  padding: '8px',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: '6px',
+                }}
+              >
                 <textarea
+                  ref={aiTextareaRef}
                   rows={2}
-                  value={promptInput}
+                  value={combinedMainAiInput}
                   onChange={(e) => setPromptInput(e.target.value)}
-                  onFocus={applyVisualSelectionLock}
                   placeholder={
-                    selectedText
-                      ? 'e.g. "Rewrite this in a more academic tone"...'
-                      : aiTargetGroupId
-                      ? 'Instruct AI for the selected Page Group...'
-                      : 'Ask AI to write, expand, rewrite or summarise...'
+                    mainAiScope === 'group' && activeGroupObj
+                      ? `Instruct AI for ${activeGroupObj.name}...`
+                      : mainAiScope === 'page'
+                      ? `Instruct AI for Page ${aiTargetSinglePage + 1}...`
+                      : 'Instruct AI for the entire document...'
                   }
-                  className="ed-textarea"
                   style={{
+                    width: '100%',
+                    border: 'none',
+                    backgroundColor: 'transparent',
+                    color: 'var(--ink-navy)',
                     fontSize: '12.5px',
-                    padding: '7px 9px',
+                    lineHeight: 1.45,
+                    outline: 'none',
                     resize: 'none',
                   }}
                   onKeyDown={(e) => {
@@ -3259,15 +3838,142 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
                   }}
                 />
 
-                <button
-                  onClick={() => handleSendAiPrompt()}
-                  disabled={isAiLoading || !promptInput.trim()}
-                  className="btn-ed-primary"
-                  style={{ padding: '0 12px', flexShrink: 0 }}
-                  title="Send Instruction"
+                {/* Attached Reference Documents & Images inside Main AI Assistant (Requirement 7) */}
+                {aiUploadedRefs.length > 0 && (
+                  <div
+                    style={{ display: 'flex', flexWrap: 'wrap', gap: '4px' }}
+                  >
+                    {aiUploadedRefs.map((att, idx) => (
+                      <span
+                        key={idx}
+                        style={{
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: '4px',
+                          padding: '2px 6px',
+                          backgroundColor: 'var(--bg-stone)',
+                          border: '1px solid var(--border-stone)',
+                          fontSize: '10.5px',
+                          color: 'var(--ink-navy)',
+                        }}
+                      >
+                        <FileText size={10} color="var(--accent-blue)" />
+                        <span>{att.name}</span>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setAiUploadedRefs((prev) =>
+                              prev.filter((_, i) => i !== idx)
+                            )
+                          }
+                          style={{
+                            background: 'none',
+                            border: 'none',
+                            cursor: 'pointer',
+                            color: 'var(--ink-muted)',
+                          }}
+                        >
+                          ×
+                        </button>
+                      </span>
+                    ))}
+                  </div>
+                )}
+
+                <div
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    paddingTop: '4px',
+                    borderTop: '1px solid var(--border-ivory)',
+                  }}
                 >
-                  <Send size={13} />
-                </button>
+                  <span
+                    style={{
+                      fontSize: '10px',
+                      color: isMainAiRecording ? '#15803D' : 'var(--ink-muted)',
+                      fontWeight: isMainAiRecording ? 600 : 400,
+                    }}
+                  >
+                    {isMainAiRecording
+                      ? 'Listening... Speak now'
+                      : mainAiScope === 'page'
+                      ? `Scope: Page ${aiTargetSinglePage + 1}`
+                      : mainAiScope === 'group' && activeGroupObj
+                      ? `Scope: ${activeGroupObj.name}`
+                      : 'Scope: Entire Document'}
+                  </span>
+
+                  <div style={{ display: 'flex', gap: '5px' }}>
+                    <button
+                      type="button"
+                      onClick={toggleMainAiVoice}
+                      title="Voice-to-Text Input"
+                      style={{
+                        width: '28px',
+                        height: '28px',
+                        border: isMainAiRecording
+                          ? '1px solid #16A34A'
+                          : '1px solid var(--border-stone)',
+                        backgroundColor: isMainAiRecording
+                          ? '#16A34A'
+                          : 'var(--bg-stone)',
+                        color: isMainAiRecording
+                          ? '#FFFFFF'
+                          : 'var(--ink-navy)',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        cursor: 'pointer',
+                      }}
+                    >
+                      {isMainAiRecording ? (
+                        <Square size={11} />
+                      ) : (
+                        <Mic size={12} />
+                      )}
+                    </button>
+
+                    <label
+                      title="Upload Reference Document or Image"
+                      style={{
+                        width: '28px',
+                        height: '28px',
+                        border: '1px solid var(--border-stone)',
+                        backgroundColor: 'var(--bg-stone)',
+                        color: 'var(--ink-navy)',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        cursor: 'pointer',
+                      }}
+                    >
+                      <Paperclip size={12} />
+                      <input
+                        type="file"
+                        multiple
+                        accept="image/*,.pdf,.doc,.docx,.txt,.md"
+                        onChange={handleMainAiFileAttach}
+                        style={{ display: 'none' }}
+                      />
+                    </label>
+
+                    <button
+                      type="button"
+                      onClick={handleSendAiPrompt}
+                      disabled={
+                        isAiLoading ||
+                        (!combinedMainAiInput.trim() &&
+                          aiUploadedRefs.length === 0)
+                      }
+                      className="btn-ed-primary"
+                      style={{ padding: '0 10px', height: '28px' }}
+                    >
+                      <Send size={11} />
+                    </button>
+                  </div>
+                </div>
               </div>
             </div>
           </aside>
@@ -3275,429 +3981,22 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
       </div>
 
       {/* =====================================================================
-          SECTION 9A: CHANGE PAGE LAYOUT MODAL
+          CHANGE PAGE LAYOUT MODAL
       ===================================================================== */}
       {showLayoutModal && (
-        <div className="nc-modal-backdrop no-print">
-          <div className="nc-modal-dialog" style={{ maxWidth: '580px' }}>
-            <div
-              style={{
-                padding: '16px 20px',
-                borderBottom: '1px solid var(--border-ivory)',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'space-between',
-              }}
-            >
-              <div>
-                <h2 style={{ fontSize: '17px', fontWeight: 800 }}>
-                  Change Page Layout
-                </h2>
-                <p style={{ fontSize: '12px', color: 'var(--ink-muted)' }}>
-                  Customise page size, orientation, margins, columns and
-                  appearance.
-                </p>
-              </div>
-              <button
-                onClick={() => setShowLayoutModal(false)}
-                className="btn-ed-subtle"
-                style={{ padding: '5px' }}
-              >
-                <X size={14} />
-              </button>
-            </div>
-
-            <div
-              style={{
-                padding: '20px',
-                overflowY: 'auto',
-                display: 'flex',
-                flexDirection: 'column',
-                gap: '16px',
-              }}
-            >
-              {/* Page Size & Orientation */}
-              <div className="nc-grid-2col">
-                <div>
-                  <label className="ed-field-label">Page Size</label>
-                  <select
-                    value={layout.pageSize}
-                    onChange={(e) =>
-                      setLayout((prev) => ({
-                        ...prev,
-                        pageSize: e.target
-                          .value as PageLayoutSettings['pageSize'],
-                      }))
-                    }
-                    className="ed-select"
-                  >
-                    <option value="A4">A4 (210 × 297 mm)</option>
-                    <option value="A3">A3 (297 × 420 mm)</option>
-                    <option value="A5">A5 (148 × 210 mm)</option>
-                    <option value="Letter">Letter (216 × 279 mm)</option>
-                    <option value="Legal">Legal (216 × 356 mm)</option>
-                    <option value="Custom">Custom Dimensions</option>
-                  </select>
-                </div>
-
-                <div>
-                  <label className="ed-field-label">Page Orientation</label>
-                  <div style={{ display: 'flex', gap: '6px' }}>
-                    {(['portrait', 'landscape'] as const).map((orient) => {
-                      const currentOrient =
-                        layoutScope === 'page'
-                          ? layout.sectionOrientations?.[
-                              activePageIdxRef.current
-                            ] || layout.orientation
-                          : layout.orientation;
-                      return (
-                        <button
-                          key={orient}
-                          type="button"
-                          onClick={() => {
-                            if (layoutScope === 'page') {
-                              setLayout((prev) => ({
-                                ...prev,
-                                sectionOrientations: {
-                                  ...(prev.sectionOrientations || {}),
-                                  [activePageIdxRef.current]: orient,
-                                },
-                              }));
-                            } else {
-                              setLayout((prev) => ({
-                                ...prev,
-                                orientation: orient,
-                                sectionOrientations: {},
-                              }));
-                            }
-                          }}
-                          className={
-                            currentOrient === orient
-                              ? 'btn-ed-primary'
-                              : 'btn-ed-subtle'
-                          }
-                          style={{ flex: 1, padding: '8px' }}
-                        >
-                          {orient}
-                        </button>
-                      );
-                    })}
-                  </div>
-                </div>
-              </div>
-
-              {/* Scope for Orientation */}
-              <div
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '10px',
-                  flexWrap: 'wrap',
-                }}
-              >
-                <span className="ed-field-label" style={{ marginBottom: 0 }}>
-                  Apply Orientation To:
-                </span>
-                <button
-                  type="button"
-                  onClick={() => setLayoutScope('document')}
-                  className={
-                    layoutScope === 'document'
-                      ? 'btn-ed-primary'
-                      : 'btn-ed-subtle'
-                  }
-                  style={{ padding: '4px 10px', fontSize: '9.5px' }}
-                >
-                  Entire Document
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setLayoutScope('page')}
-                  className={
-                    layoutScope === 'page' ? 'btn-ed-primary' : 'btn-ed-subtle'
-                  }
-                  style={{ padding: '4px 10px', fontSize: '9.5px' }}
-                >
-                  Page {activePageIdxRef.current + 1} Only
-                </button>
-              </div>
-
-              {layout.pageSize === 'Custom' && (
-                <div className="nc-grid-2col">
-                  <div>
-                    <label className="ed-field-label">Custom Width (mm)</label>
-                    <input
-                      type="number"
-                      value={layout.customWidthMm || 210}
-                      onChange={(e) =>
-                        setLayout((prev) => ({
-                          ...prev,
-                          customWidthMm: parseInt(e.target.value || '210', 10),
-                        }))
-                      }
-                      className="ed-input"
-                    />
-                  </div>
-                  <div>
-                    <label className="ed-field-label">Custom Height (mm)</label>
-                    <input
-                      type="number"
-                      value={layout.customHeightMm || 297}
-                      onChange={(e) =>
-                        setLayout((prev) => ({
-                          ...prev,
-                          customHeightMm: parseInt(e.target.value || '297', 10),
-                        }))
-                      }
-                      className="ed-input"
-                    />
-                  </div>
-                </div>
-              )}
-
-              {/* Page Margins */}
-              <div>
-                <div
-                  style={{
-                    display: 'flex',
-                    justifyContent: 'space-between',
-                    alignItems: 'center',
-                    flexWrap: 'wrap',
-                    gap: '6px',
-                    marginBottom: '6px',
-                  }}
-                >
-                  <label className="ed-field-label" style={{ marginBottom: 0 }}>
-                    Page Margins (mm)
-                  </label>
-                  <div style={{ display: 'flex', gap: '5px', flexWrap: 'wrap' }}>
-                    {(
-                      [
-                        ['normal', 'Normal (25mm)', 25],
-                        ['narrow', 'Narrow (13mm)', 13],
-                        ['wide', 'Wide (35mm)', 35],
-                      ] as const
-                    ).map(([preset, label, val]) => (
-                      <button
-                        key={preset}
-                        type="button"
-                        onClick={() =>
-                          setLayout((prev) => ({
-                            ...prev,
-                            marginPreset: preset,
-                            marginTopMm: val,
-                            marginBottomMm: val,
-                            marginLeftMm: val,
-                            marginRightMm: val,
-                          }))
-                        }
-                        className="btn-ed-subtle"
-                        style={{ padding: '3px 7px', fontSize: '9px' }}
-                      >
-                        {label}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-
-                <div className="nc-grid-4col">
-                  {(
-                    [
-                      ['marginTopMm', 'Top'],
-                      ['marginBottomMm', 'Bottom'],
-                      ['marginLeftMm', 'Left'],
-                      ['marginRightMm', 'Right'],
-                    ] as const
-                  ).map(([field, label]) => (
-                    <div key={field}>
-                      <label className="ed-field-label">{label}</label>
-                      <input
-                        type="number"
-                        min={5}
-                        max={60}
-                        value={layout[field]}
-                        onChange={(e) =>
-                          setLayout((prev) => ({
-                            ...prev,
-                            marginPreset: 'custom',
-                            [field]: parseInt(e.target.value || '20', 10),
-                          }))
-                        }
-                        className="ed-input"
-                        style={{ padding: '6px 8px' }}
-                      />
-                    </div>
-                  ))}
-                </div>
-              </div>
-
-              {/* Page Columns */}
-              <div className="nc-grid-2col">
-                <div>
-                  <label className="ed-field-label">Page Columns</label>
-                  <div style={{ display: 'flex', gap: '6px' }}>
-                    {([1, 2, 3] as const).map((col) => (
-                      <button
-                        key={col}
-                        type="button"
-                        onClick={() =>
-                          setLayout((prev) => ({ ...prev, columns: col }))
-                        }
-                        className={
-                          layout.columns === col
-                            ? 'btn-ed-primary'
-                            : 'btn-ed-subtle'
-                        }
-                        style={{ flex: 1, padding: '7px' }}
-                      >
-                        {col} Col
-                      </button>
-                    ))}
-                  </div>
-                </div>
-
-                <div>
-                  <label className="ed-field-label">
-                    Column Spacing (px)
-                  </label>
-                  <input
-                    type="number"
-                    min={10}
-                    max={64}
-                    value={layout.columnGapPx}
-                    onChange={(e) =>
-                      setLayout((prev) => ({
-                        ...prev,
-                        columnGapPx: parseInt(e.target.value || '24', 10),
-                      }))
-                    }
-                    className="ed-input"
-                    style={{ padding: '6px 8px' }}
-                  />
-                </div>
-              </div>
-
-              {/* Page Appearance (Background, Borders, Header/Footer Spacing) */}
-              <div
-                style={{
-                  display: 'grid',
-                  gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))',
-                  gap: '10px',
-                }}
-              >
-                <div>
-                  <label className="ed-field-label">Page Background</label>
-                  <input
-                    type="color"
-                    value={layout.pageBackground}
-                    onChange={(e) =>
-                      setLayout((prev) => ({
-                        ...prev,
-                        pageBackground: e.target.value,
-                      }))
-                    }
-                    style={{
-                      width: '100%',
-                      height: '34px',
-                      border: '1px solid var(--border-stone)',
-                      cursor: 'pointer',
-                    }}
-                  />
-                </div>
-
-                <div>
-                  <label className="ed-field-label">Page Border</label>
-                  <select
-                    value={layout.borderStyle}
-                    onChange={(e) =>
-                      setLayout((prev) => ({
-                        ...prev,
-                        borderStyle: e.target
-                          .value as PageLayoutSettings['borderStyle'],
-                      }))
-                    }
-                    className="ed-select"
-                  >
-                    <option value="none">None</option>
-                    <option value="solid">Solid</option>
-                    <option value="double">Double</option>
-                    <option value="dashed">Dashed</option>
-                  </select>
-                </div>
-
-                <div>
-                  <label className="ed-field-label">Border Thickness</label>
-                  <select
-                    value={layout.borderWidthPx}
-                    onChange={(e) =>
-                      setLayout((prev) => ({
-                        ...prev,
-                        borderWidthPx: parseInt(e.target.value, 10),
-                      }))
-                    }
-                    className="ed-select"
-                  >
-                    <option value={1}>1 px</option>
-                    <option value={2}>2 px</option>
-                    <option value={4}>4 px</option>
-                    <option value={6}>6 px</option>
-                  </select>
-                </div>
-
-                <div>
-                  <label className="ed-field-label">Border Colour</label>
-                  <input
-                    type="color"
-                    value={layout.borderColor}
-                    onChange={(e) =>
-                      setLayout((prev) => ({
-                        ...prev,
-                        borderColor: e.target.value,
-                      }))
-                    }
-                    style={{
-                      width: '100%',
-                      height: '34px',
-                      border: '1px solid var(--border-stone)',
-                      cursor: 'pointer',
-                    }}
-                  />
-                </div>
-              </div>
-            </div>
-
-            <div
-              style={{
-                padding: '14px 20px',
-                borderTop: '1px solid var(--border-ivory)',
-                backgroundColor: 'var(--bg-stone)',
-                display: 'flex',
-                justifyContent: 'flex-end',
-                gap: '8px',
-              }}
-            >
-              <button
-                onClick={() => {
-                  setLayout(DEFAULT_LAYOUT);
-                  triggerAutoSave({ overrideLayout: DEFAULT_LAYOUT });
-                }}
-                className="btn-ed-subtle"
-              >
-                Reset Default
-              </button>
-              <button
-                onClick={() => {
-                  setShowLayoutModal(false);
-                  triggerAutoSave({ overrideLayout: layout });
-                  setTimeout(() => checkAndFlowPages(0), 60);
-                }}
-                className="btn-ed-primary"
-              >
-                Apply Layout Changes
-              </button>
-            </div>
-          </div>
-        </div>
+        <PageLayoutModal
+          layout={layout}
+          layoutScope={layoutScope}
+          activePageIndex={activePageIdxRef.current}
+          onChangeLayout={setLayout}
+          onChangeScope={setLayoutScope}
+          onResetDefault={() => setLayout(DEFAULT_LAYOUT)}
+          onApplyAndClose={() => {
+            setShowLayoutModal(false);
+            triggerAutoSave({ overrideLayout: layout });
+          }}
+          onClose={() => setShowLayoutModal(false)}
+        />
       )}
     </div>
   );

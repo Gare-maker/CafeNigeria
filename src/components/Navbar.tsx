@@ -131,7 +131,10 @@ export const Navbar: React.FC<NavbarProps> = ({
           </span>
         </button>
 
-        {/* Right section: Search, Online/offline sync indicator, Mode switcher, Settings, Create button */}
+        {/* Right section:
+            - On Category/Details Page (Requirement 1): ONLY Theme toggle, Settings, and Create [Category] button (No search bar in header).
+            - On Homepage: Search, Sync indicator, Theme toggle, Settings, and Global Create dropdown.
+        */}
         <div
           style={{
             display: 'flex',
@@ -140,108 +143,114 @@ export const Navbar: React.FC<NavbarProps> = ({
             flexShrink: 0,
           }}
         >
-          {/* Search Input (Desktop) */}
-          <div
-            className="hide-on-mobile"
-            style={{
-              position: 'relative',
-              display: 'flex',
-              alignItems: 'center',
-            }}
-          >
-            <Search
-              size={13}
-              style={{
-                position: 'absolute',
-                left: '10px',
-                color: 'var(--ink-muted)',
-                pointerEvents: 'none',
-              }}
-            />
-            <input
-              type="text"
-              value={searchQuery}
-              onChange={(e) => onSearchChange(e.target.value)}
-              placeholder="Search documents..."
-              style={{
-                backgroundColor: 'var(--bg-ivory)',
-                border: '1px solid var(--border-ivory)',
-                padding: '6px 10px 6px 28px',
-                fontSize: '12.5px',
-                color: 'var(--ink-navy)',
-                width: '175px',
-                height: '34px',
-                outline: 'none',
-              }}
-            />
-          </div>
+          {!isCategoryView && (
+            <>
+              {/* Search Input (Homepage Desktop) */}
+              <div
+                className="hide-on-mobile"
+                style={{
+                  position: 'relative',
+                  display: 'flex',
+                  alignItems: 'center',
+                }}
+              >
+                <Search
+                  size={13}
+                  style={{
+                    position: 'absolute',
+                    left: '10px',
+                    color: 'var(--ink-muted)',
+                    pointerEvents: 'none',
+                  }}
+                />
+                <input
+                  type="text"
+                  value={searchQuery}
+                  onChange={(e) => onSearchChange(e.target.value)}
+                  placeholder="Search documents & content..."
+                  style={{
+                    backgroundColor: 'var(--bg-ivory)',
+                    border: '1px solid var(--border-ivory)',
+                    padding: '6px 10px 6px 28px',
+                    fontSize: '12.5px',
+                    color: 'var(--ink-navy)',
+                    width: '195px',
+                    height: '34px',
+                    outline: 'none',
+                  }}
+                />
+              </div>
 
-          {/* Search Toggle Button (Mobile) */}
-          <button
-            onClick={() => setShowMobileSearch((prev) => !prev)}
-            className="show-on-mobile"
-            title="Search documents"
-            style={{
-              width: '34px',
-              height: '34px',
-              border: '1px solid var(--border-ivory)',
-              backgroundColor: showMobileSearch
-                ? 'var(--bg-stone)'
-                : 'transparent',
-              color: 'var(--ink-navy)',
-              alignItems: 'center',
-              justifyContent: 'center',
-              cursor: 'pointer',
-              flexShrink: 0,
-            }}
-          >
-            <Search size={14} />
-          </button>
+              {/* Search Toggle Button (Homepage Mobile) */}
+              <button
+                onClick={() => setShowMobileSearch((prev) => !prev)}
+                className="show-on-mobile"
+                title="Search documents"
+                style={{
+                  width: '34px',
+                  height: '34px',
+                  border: '1px solid var(--border-ivory)',
+                  backgroundColor: showMobileSearch
+                    ? 'var(--bg-stone)'
+                    : 'transparent',
+                  color: 'var(--ink-navy)',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  cursor: 'pointer',
+                  flexShrink: 0,
+                }}
+              >
+                <Search size={14} />
+              </button>
 
-          {/*Online/Offline Synchronisation Indicator */}
-          <button
-            onClick={onToggleOnline}
-            title="Click to toggle Online / Offline synchronisation state"
-            style={{
-              display: 'inline-flex',
-              alignItems: 'center',
-              gap: '5px',
-              height: '34px',
-              padding: '0 10px',
-              border: '1px solid var(--border-ivory)',
-              backgroundColor: isOnline
-                ? 'transparent'
-                : 'rgba(217, 78, 52, 0.08)',
-              color: isOnline ? 'var(--ink-navy)' : 'var(--accent-terracotta)',
-              fontFamily: 'var(--font-mono)',
-              fontSize: '10px',
-              fontWeight: 500,
-              letterSpacing: '0.07em',
-              textTransform: 'uppercase',
-              cursor: 'pointer',
-            }}
-          >
-            {isSyncing ? (
-              <>
-                <RefreshCw size={12} color="var(--accent-blue)" />
-                <span className="hide-on-mobile">Syncing...</span>
-              </>
-            ) : isOnline ? (
-              <>
-                <Wifi size={12} color="#16A34A" />
-                <span className="hide-on-mobile">Saved</span>
-              </>
-            ) : (
-              <>
-                <WifiOff size={12} color="var(--accent-terracotta)" />
-                <span>
-                  Offline{pendingSyncCount > 0 ? ` (${pendingSyncCount})` : ''}
-                </span>
-              </>
-            )}
-          </button>
+              {/* Online/Offline Synchronisation Indicator */}
+              <button
+                onClick={onToggleOnline}
+                title="Click to toggle Online / Offline synchronisation state"
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '5px',
+                  height: '34px',
+                  padding: '0 10px',
+                  border: '1px solid var(--border-ivory)',
+                  backgroundColor: isOnline
+                    ? 'transparent'
+                    : 'rgba(217, 78, 52, 0.08)',
+                  color: isOnline
+                    ? 'var(--ink-navy)'
+                    : 'var(--accent-terracotta)',
+                  fontFamily: 'var(--font-mono)',
+                  fontSize: '10px',
+                  fontWeight: 500,
+                  letterSpacing: '0.07em',
+                  textTransform: 'uppercase',
+                  cursor: 'pointer',
+                }}
+              >
+                {isSyncing ? (
+                  <>
+                    <RefreshCw size={12} color="var(--accent-blue)" />
+                    <span className="hide-on-mobile">Syncing...</span>
+                  </>
+                ) : isOnline ? (
+                  <>
+                    <Wifi size={12} color="#16A34A" />
+                    <span className="hide-on-mobile">Saved</span>
+                  </>
+                ) : (
+                  <>
+                    <WifiOff size={12} color="var(--accent-terracotta)" />
+                    <span>
+                      Offline{pendingSyncCount > 0 ? ` (${pendingSyncCount})` : ''}
+                    </span>
+                  </>
+                )}
+              </button>
+            </>
+          )}
 
-          {/* Mode Switcher */}
+          {/* Theme Toggle */}
           <button
             onClick={onToggleDarkMode}
             title="Switch Light / Dark Mode"
@@ -284,7 +293,7 @@ export const Navbar: React.FC<NavbarProps> = ({
             <span className="hide-on-mobile">Settings</span>
           </button>
 
-          {/* Contextual Create Button on Category Pages vs Global Create Dropdown on Homepage (Section 3) */}
+          {/* Contextual Create Button on Category Pages vs Global Create Dropdown on Homepage */}
           {isCategoryView ? (
             <button
               onClick={() => onOpenCreateModal(activeCategory)}
@@ -375,8 +384,8 @@ export const Navbar: React.FC<NavbarProps> = ({
         </div>
       </div>
 
-      {/* Expandable Search Bar for Mobile Screens */}
-      {showMobileSearch && (
+      {/* Expandable Search Bar for Homepage Mobile Screens */}
+      {!isCategoryView && showMobileSearch && (
         <div
           className="nc-container"
           style={{
@@ -393,7 +402,7 @@ export const Navbar: React.FC<NavbarProps> = ({
             type="text"
             value={searchQuery}
             onChange={(e) => onSearchChange(e.target.value)}
-            placeholder="Search documents..."
+            placeholder="Search documents & content..."
             className="ed-input"
             style={{ padding: '7px 11px', fontSize: '13px' }}
             autoFocus

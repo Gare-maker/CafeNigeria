@@ -5,6 +5,144 @@ import {
   PageGroup,
 } from '../types';
 
+const MONTH_NAMES = [
+  'January',
+  'February',
+  'March',
+  'April',
+  'May',
+  'June',
+  'July',
+  'August',
+  'September',
+  'October',
+  'November',
+  'December',
+];
+
+/**
+ * Formats any date string so the month is always displayed in words
+ * e.g. "26/02/2006" -> "26 February 2006", "2026-11-07 21:40" -> "07 November 2026"
+ */
+export function formatDisplayDate(raw?: string): string {
+  if (!raw) return getCurrentFormattedDate();
+  const trimmed = raw.trim();
+
+  // Already contains a month word?
+  if (/[A-Za-z]{3,}/.test(trimmed)) {
+    return trimmed;
+  }
+
+  // Match YYYY-MM-DD (with optional time)
+  const isoMatch = trimmed.match(/^(\d{4})[-/](\d{1,2})[-/](\d{1,2})/);
+  if (isoMatch) {
+    const year = isoMatch[1];
+    const monthIdx = Math.max(0, Math.min(11, parseInt(isoMatch[2], 10) - 1));
+    const day = String(parseInt(isoMatch[3], 10)).padStart(2, '0');
+    return `${day} ${MONTH_NAMES[monthIdx]} ${year}`;
+  }
+
+  // Match DD/MM/YYYY or DD-MM-YYYY
+  const dmyMatch = trimmed.match(/^(\d{1,2})[-/](\d{1,2})[-/](\d{4})/);
+  if (dmyMatch) {
+    const day = String(parseInt(dmyMatch[1], 10)).padStart(2, '0');
+    const monthIdx = Math.max(0, Math.min(11, parseInt(dmyMatch[2], 10) - 1));
+    const year = dmyMatch[3];
+    return `${day} ${MONTH_NAMES[monthIdx]} ${year}`;
+  }
+
+  const parsed = new Date(trimmed);
+  if (!isNaN(parsed.getTime())) {
+    const day = String(parsed.getDate()).padStart(2, '0');
+    const month = MONTH_NAMES[parsed.getMonth()];
+    const year = parsed.getFullYear();
+    return `${day} ${month} ${year}`;
+  }
+
+  return trimmed;
+}
+
+export function getCurrentFormattedDate(): string {
+  const now = new Date();
+  const day = String(now.getDate()).padStart(2, '0');
+  const month = MONTH_NAMES[now.getMonth()];
+  const year = now.getFullYear();
+  return `${day} ${month} ${year}`;
+}
+
+/**
+ * Strips HTML tags and normalizes whitespace for full-text search
+ */
+export function stripHtmlToPlainText(html: string): string {
+  return html
+    .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, ' ')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&amp;/gi, '&')
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+/**
+ * Searches a document across Title, Metadata, and Full Document Content (Requirement 2)
+ */
+export function searchDocumentMatch(
+  doc: DocumentItem,
+  query: string
+): {
+  matched: boolean;
+  matchLocation?: 'Title' | 'Document Content' | 'Metadata';
+  snippet?: string;
+} {
+  const q = query.trim().toLowerCase();
+  if (!q) return { matched: true };
+
+  if (doc.title.toLowerCase().includes(q)) {
+    return {
+      matched: true,
+      matchLocation: 'Title',
+    };
+  }
+
+  const plainContent = stripHtmlToPlainText(doc.content);
+  const contentLower = plainContent.toLowerCase();
+  const contentIdx = contentLower.indexOf(q);
+  if (contentIdx !== -1) {
+    const start = Math.max(0, contentIdx - 48);
+    const end = Math.min(plainContent.length, contentIdx + q.length + 68);
+    const prefix = start > 0 ? '...' : '';
+    const suffix = end < plainContent.length ? '...' : '';
+    return {
+      matched: true,
+      matchLocation: 'Document Content',
+      snippet: `${prefix}${plainContent.slice(start, end).trim()}${suffix}`,
+    };
+  }
+
+  const metaFields = [
+    doc.metadata.studentName,
+    doc.metadata.institution,
+    doc.metadata.department,
+    doc.metadata.course,
+    doc.metadata.courseCode,
+    doc.metadata.lecturerOrSupervisor,
+  ]
+    .filter(Boolean)
+    .join(' • ');
+
+  if (metaFields.toLowerCase().includes(q)) {
+    return {
+      matched: true,
+      matchLocation: 'Metadata',
+      snippet: metaFields,
+    };
+  }
+
+  return { matched: false };
+}
+
 export const CATEGORIES: CategoryMeta[] = [
   {
     id: 'projects',
@@ -99,9 +237,9 @@ export const CATEGORY_PAGE_COPY: Record<
     supportingText:
       'Create and organise your academic research projects with AI.',
     buttonLabel: 'Create Project',
-    modalTitle: 'Create Project',
+    modalTitle: 'Create Research Project Faster with AI',
     modalSubtitle:
-      'Describe the research project you want to generate. You can type, speak or upload reference materials.',
+      'Create a new research project or select an existing document from your library to improve with AI.',
     placeholder:
       'Describe the research project you want to create (e.g., "Write Chapters 1 to 3 on the impact of social media on academic performance among undergraduate students at the University of Benin...")',
   },
@@ -110,9 +248,9 @@ export const CATEGORY_PAGE_COPY: Record<
     supportingText:
       'Generate, edit and organise your academic assignments with AI assistance.',
     buttonLabel: 'Create Assignment',
-    modalTitle: 'Create Assignment',
+    modalTitle: 'Create Assignment Faster with AI',
     modalSubtitle:
-      'Describe the assignment you want to generate. You can type, speak or upload reference materials.',
+      'Create a new academic assignment or select an existing document to update with AI.',
     placeholder:
       'Describe the assignment you want to create (e.g., "Write a 1,500-word assignment on monetary policy instruments and inflation control in Nigeria with APA 7th references...")',
   },
@@ -120,9 +258,9 @@ export const CATEGORY_PAGE_COPY: Record<
     heading: 'Create seminar papers faster with AI.',
     supportingText: 'Generate and format seminar papers with AI assistance.',
     buttonLabel: 'Create Seminar',
-    modalTitle: 'Create Seminar',
+    modalTitle: 'Create Seminar Paper Faster with AI',
     modalSubtitle:
-      'Describe the seminar paper you want to generate. You can type, speak or upload reference materials.',
+      'Create a new seminar paper or continue working on an existing document from your file library.',
     placeholder:
       'Describe the seminar paper you want to create (e.g., "Prepare a final year seminar paper on renewable energy microgrids for rural healthcare electrification in Nigeria...")',
   },
@@ -130,9 +268,9 @@ export const CATEGORY_PAGE_COPY: Record<
     heading: 'Create professional CVs faster with AI.',
     supportingText: 'Build professional CVs tailored to your career goals.',
     buttonLabel: 'Create CV',
-    modalTitle: 'Create CV',
+    modalTitle: 'Create Professional CV Faster with AI',
     modalSubtitle:
-      'Describe your background, work experience, education and target role. You can type, speak or upload an existing CV or image.',
+      'Describe your background, work experience and target role, or select an existing CV to tailor with AI.',
     placeholder:
       'Describe your details for the CV (e.g., "Create a professional CV for Osahon Eghosa, First Class Computer Science graduate from Covenant University applying for a Data Analyst role in Lagos...")',
   },
@@ -141,9 +279,9 @@ export const CATEGORY_PAGE_COPY: Record<
     supportingText:
       'Turn pictures, handwritten materials and documents into organised notes.',
     buttonLabel: 'Create Notes',
-    modalTitle: 'Create Notes from Image',
+    modalTitle: 'Create Organised Notes Faster with AI',
     modalSubtitle:
-      'Upload images of handwritten notes, textbooks or lecture boards, and describe how you want your notes organised.',
+      'Upload images of handwritten notes or textbooks, or select an existing notes document to expand.',
     placeholder:
       'Describe how you want the extracted material organised (e.g., "Convert the uploaded lecture board images on cell signalling into structured headings, bullet points and 5 revision questions...")',
   },
@@ -155,8 +293,8 @@ export const INITIAL_DOCUMENTS: DocumentItem[] = [
     title:
       'The Impact of Social Media on Academic Performance Among University Students',
     category: 'projects',
-    createdAt: '2026-11-04 09:15',
-    updatedAt: '2026-11-07 21:40',
+    createdAt: '04 November 2026',
+    updatedAt: '07 November 2026',
     status: 'In Progress',
     syncStatus: 'saved',
     format: 'DOCX',
@@ -238,8 +376,8 @@ export const INITIAL_DOCUMENTS: DocumentItem[] = [
     title:
       'Monetary Policy Instruments and Inflation Control in Nigeria (2018–2026)',
     category: 'assignments',
-    createdAt: '2026-11-06 14:20',
-    updatedAt: '2026-11-07 18:12',
+    createdAt: '06 November 2026',
+    updatedAt: '07 November 2026',
     status: 'Completed',
     syncStatus: 'saved',
     format: 'DOCX',
@@ -310,8 +448,8 @@ export const INITIAL_DOCUMENTS: DocumentItem[] = [
     title:
       'Renewable Energy Microgrids for Rural Healthcare Electrification in Nigeria',
     category: 'seminars',
-    createdAt: '2026-11-05 11:05',
-    updatedAt: '2026-11-07 15:30',
+    createdAt: '05 November 2026',
+    updatedAt: '07 November 2026',
     status: 'Completed',
     syncStatus: 'saved',
     format: 'PDF',
@@ -350,8 +488,8 @@ export const INITIAL_DOCUMENTS: DocumentItem[] = [
     id: 'doc-cv-01',
     title: 'Osahon_Eghosa_Graduate_Analyst_CV',
     category: 'cv',
-    createdAt: '2026-11-03 16:40',
-    updatedAt: '2026-11-07 12:15',
+    createdAt: '03 November 2026',
+    updatedAt: '07 November 2026',
     status: 'Completed',
     syncStatus: 'saved',
     format: 'DOCX',
@@ -394,8 +532,8 @@ export const INITIAL_DOCUMENTS: DocumentItem[] = [
     title:
       'BIO 201 Cell Signalling & Membrane Transport — Extracted Lecture Notes',
     category: 'image-to-notes',
-    createdAt: '2026-11-07 08:50',
-    updatedAt: '2026-11-07 19:05',
+    createdAt: '07 November 2026',
+    updatedAt: '07 November 2026',
     status: 'Draft',
     syncStatus: 'saved',
     format: 'DOCX',
@@ -782,23 +920,429 @@ export function generateDocumentFromNaturalPrompt(
   };
 }
 
+/**
+ * Requirement 15 & 17: Modify an Existing Document with AI in the Creation Modal Workflow
+ */
+export function modifyExistingDocumentWithAI(
+  existingDoc: DocumentItem,
+  instruction: string,
+  uploadedAttachments: { name: string; extractedText: string }[]
+): { content: string; summary: string } {
+  const p = instruction.toLowerCase();
+  const refBlock =
+    uploadedAttachments.length > 0
+      ? uploadedAttachments
+          .map(
+            (a) =>
+              `<p><strong>Integrated Reference (${a.name}):</strong> ${a.extractedText}</p>`
+          )
+          .join('\n')
+      : '';
+
+  if (p.includes('table') || p.includes('compare') || p.includes('matrix')) {
+    const tableHtml = `
+      <h2>Comparative Analytical Summary</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>Evaluation Criterion</th>
+            <th>Baseline Observation</th>
+            <th>Updated AI Synthesis</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Operational Effectiveness</td>
+            <td>Conventional manual workflow</td>
+            <td>94.2% efficiency under modernized framework</td>
+          </tr>
+          <tr>
+            <td>Cost &amp; Resource Impact</td>
+            <td>High recurring overhead</td>
+            <td>38% reduction in lifecycle expenditure</td>
+          </tr>
+          <tr>
+            <td>Institutional Adoption</td>
+            <td>Fragmented departmental uptake</td>
+            <td>Standardized multi-centre deployment</td>
+          </tr>
+        </tbody>
+      </table>
+      ${refBlock}
+    `;
+    return {
+      content: `${existingDoc.content}\n${tableHtml}`,
+      summary: `Added comparative table and updated "${existingDoc.title}" based on your instruction.`,
+    };
+  }
+
+  return {
+    content: `${existingDoc.content}\n<h2>AI Updated Section: ${
+      instruction.length < 65 ? instruction : 'Expanded Analysis & Recommendations'
+    }</h2><p>In accordance with the update instruction (<em>"${instruction}"</em>), this document has been expanded with updated empirical analysis, refined academic structure, and actionable policy insights tailored to <strong>${existingDoc.title}</strong>.</p>${refBlock}`,
+    summary: `Updated "${existingDoc.title}" with your instructions.`,
+  };
+}
+
+/**
+ * Requirement 4: Dedicated Text-Level AI Editing (Operates EXCLUSIVELY on highlighted text)
+ */
+export function runTextLevelAI(
+  selectedText: string,
+  instruction: string
+): { updatedHtml: string; summary: string } {
+  const clean = selectedText.trim();
+  const p = instruction.toLowerCase();
+
+  if (
+    p.includes('shorter') ||
+    p.includes('shorten') ||
+    p.includes('concise') ||
+    p.includes('summarise') ||
+    p.includes('summarize')
+  ) {
+    const words = clean.split(/\s+/);
+    const condensed =
+      words.length > 16
+        ? `${words.slice(0, Math.ceil(words.length * 0.55)).join(' ')}.`
+        : clean;
+    return {
+      updatedHtml: condensed,
+      summary: 'Shortened selected text for conciseness.',
+    };
+  }
+
+  if (p.includes('expand') || p.includes('longer') || p.includes('elaborate')) {
+    return {
+      updatedHtml: `${clean} Furthermore, empirical evidence across Nigerian academic and professional institutions demonstrates that this factor plays a decisive role in shaping long-term operational efficiency, stakeholder satisfaction, and measurable policy outcomes.`,
+      summary: 'Expanded the highlighted text with supporting detail.',
+    };
+  }
+
+  if (
+    p.includes('grammar') ||
+    p.includes('correct') ||
+    p.includes('fix') ||
+    p.includes('proofread')
+  ) {
+    const corrected = clean
+      .replace(/\s+/g, ' ')
+      .replace(/\bi\b/g, 'I')
+      .replace(/^\w/, (c) => c.toUpperCase());
+    return {
+      updatedHtml: corrected.endsWith('.') ? corrected : `${corrected}.`,
+      summary: 'Corrected grammatical errors and punctuation.',
+    };
+  }
+
+  if (p.includes('bullet') || p.includes('list')) {
+    const sentences = clean
+      .split(/(?<=[.!?])\s+/)
+      .map((s) => s.trim())
+      .filter(Boolean);
+    const items =
+      sentences.length > 1
+        ? sentences.map((s) => `<li>${s}</li>`).join('')
+        : `<li>${clean}</li>`;
+    return {
+      updatedHtml: `<ul>${items}</ul>`,
+      summary: 'Converted highlighted text into a structured bulleted list.',
+    };
+  }
+
+  if (
+    p.includes('rewrite') ||
+    p.includes('improve') ||
+    p.includes('tone') ||
+    p.includes('academic') ||
+    p.includes('professional')
+  ) {
+    const base = clean.replace(/\.$/, '');
+    return {
+      updatedHtml: `Contemporary scholarship and empirical observations confirm that ${
+        base.charAt(0).toLowerCase() + base.slice(1)
+      }, thereby establishing a rigorous foundation for institutional excellence and evidence-based decision-making.`,
+      summary: 'Rewrote highlighted text with improved academic tone and clarity.',
+    };
+  }
+
+  return {
+    updatedHtml: `${clean} (Refined per instruction: ${instruction})`,
+    summary: `Applied "${instruction}" to the highlighted selection.`,
+  };
+}
+
+/**
+ * Requirement 5: Dedicated Page-Level AI Editing (Directly modifies the selected page's structure, visuals, tables, headings, or content)
+ */
+export function runPageLevelAI(
+  currentPageHtml: string,
+  pageIndex: number,
+  instruction: string,
+  docTitle: string,
+  attachments: { name: string; extractedText: string }[] = []
+): {
+  updatedPageHtml: string;
+  summary: string;
+} {
+  const p = instruction.toLowerCase();
+  const refNote =
+    attachments.length > 0
+      ? `<p><em>Reference source integrated (${attachments
+          .map((a) => a.name)
+          .join(', ')}):</em> ${attachments
+          .map((a) => a.extractedText)
+          .join(' ')}</p>`
+      : '';
+
+  // 1. Add or organise into a table on this page
+  if (p.includes('table') || p.includes('compare') || p.includes('organise the information into a table')) {
+    const isEnergy =
+      p.includes('energy') ||
+      currentPageHtml.toLowerCase().includes('energy') ||
+      docTitle.toLowerCase().includes('energy');
+
+    const tableHtml = isEnergy
+      ? `
+        <h2>Comparative Analysis of Renewable Energy Sources in Nigeria</h2>
+        <table>
+          <thead>
+            <tr>
+              <th>Energy Source</th>
+              <th>Average Capacity Factor</th>
+              <th>Levelized Cost (USD/kWh)</th>
+              <th>Suitability for Rural Clinics</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><strong>Solar PV + LiFePO4 Storage</strong></td>
+              <td>24.5% (4.5–6.5 kWh/m²/day)</td>
+              <td>$0.14 / kWh</td>
+              <td>High — 99.5% uptime &amp; zero fuel logistics</td>
+            </tr>
+            <tr>
+              <td><strong>Small Hydro Microgrid</strong></td>
+              <td>52.0% (Seasonal river flow)</td>
+              <td>$0.11 / kWh</td>
+              <td>Moderate — Site-constrained to riverine zones</td>
+            </tr>
+            <tr>
+              <td><strong>Wind Hybrid System</strong></td>
+              <td>18.2% (Northern corridor)</td>
+              <td>$0.19 / kWh</td>
+              <td>Selective — Best in coastal &amp; plateau belts</td>
+            </tr>
+            <tr>
+              <td><strong>Diesel Generator (Baseline)</strong></td>
+              <td>Variable (Fuel dependent)</td>
+              <td>$0.48 / kWh</td>
+              <td>Low — High fuel cost &amp; carbon emissions</td>
+            </tr>
+          </tbody>
+        </table>
+      `
+      : `
+        <h2>Structured Summary &amp; Comparison Table (Page ${pageIndex + 1})</h2>
+        <table>
+          <thead>
+            <tr>
+              <th>Key Parameter</th>
+              <th>Primary Indicator</th>
+              <th>Observed Empirical Outcome</th>
+              <th>Strategic Recommendation</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><strong>Institutional Adoption</strong></td>
+              <td>87.4% coverage rate</td>
+              <td>Significant improvement in processing speed</td>
+              <td>Expand standardized training across units</td>
+            </tr>
+            <tr>
+              <td><strong>Resource Efficiency</strong></td>
+              <td>72.0% cost optimization</td>
+              <td>Reduced administrative overhead and delays</td>
+              <td>Automate core reporting &amp; verification</td>
+            </tr>
+            <tr>
+              <td><strong>Quality Assurance</strong></td>
+              <td>94.1% compliance index</td>
+              <td>Higher reliability and stakeholder trust</td>
+              <td>Institute quarterly performance audits</td>
+            </tr>
+          </tbody>
+        </table>
+      `;
+
+    return {
+      updatedPageHtml: `${currentPageHtml}\n${tableHtml}${refNote}`,
+      summary: `Created and inserted a formatted comparison table directly on Page ${pageIndex + 1}.`,
+    };
+  }
+
+  // 2. Add an illustrative image / diagram directly on this page
+  if (p.includes('image') || p.includes('diagram') || p.includes('illustrat') || p.includes('figure')) {
+    const svgDiagram = `
+      <div style="margin: 16px 0; padding: 14px; border: 1px solid #CBD5E1; background-color: #F8FAFC; text-align: center;">
+        <svg width="100%" height="165" viewBox="0 0 600 165" xmlns="http://www.w3.org/2000/svg" style="max-width: 540px; margin: 0 auto; display: block;">
+          <rect x="15" y="35" width="150" height="85" fill="#EFF6FF" stroke="#1447E6" stroke-width="2" rx="4" />
+          <text x="90" y="72" text-anchor="middle" fill="#0D1B4C" font-size="12" font-weight="bold" font-family="sans-serif">1. Primary Input</text>
+          <text x="90" y="92" text-anchor="middle" fill="#475569" font-size="10" font-family="sans-serif">Data &amp; Resource Layer</text>
+          <line x1="165" y1="77" x2="220" y2="77" stroke="#1447E6" stroke-width="2" />
+          <polygon points="220,77 212,72 212,82" fill="#1447E6" />
+          <rect x="225" y="35" width="150" height="85" fill="#EEF2FF" stroke="#0D1B4C" stroke-width="2" rx="4" />
+          <text x="300" y="72" text-anchor="middle" fill="#0D1B4C" font-size="12" font-weight="bold" font-family="sans-serif">2. Processing Engine</text>
+          <text x="300" y="92" text-anchor="middle" fill="#475569" font-size="10" font-family="sans-serif">Structured Optimization</text>
+          <line x1="375" y1="77" x2="430" y2="77" stroke="#1447E6" stroke-width="2" />
+          <polygon points="430,77 422,72 422,82" fill="#1447E6" />
+          <rect x="435" y="35" width="150" height="85" fill="#ECFDF5" stroke="#16A34A" stroke-width="2" rx="4" />
+          <text x="510" y="72" text-anchor="middle" fill="#065F46" font-size="12" font-weight="bold" font-family="sans-serif">3. Verified Output</text>
+          <text x="510" y="92" text-anchor="middle" fill="#047857" font-size="10" font-family="sans-serif">99.5% Reliability Target</text>
+        </svg>
+        <p style="margin: 8px 0 0 0; font-size: 9.5pt; color: #475569; font-style: italic;">Figure ${pageIndex + 1}.1: Architectural Illustration — ${docTitle}</p>
+      </div>
+    `;
+    return {
+      updatedPageHtml: `${currentPageHtml}\n${svgDiagram}${refNote}`,
+      summary: `Inserted an illustrative architectural figure directly onto Page ${pageIndex + 1}.`,
+    };
+  }
+
+  // 3. Change statistics / numbers on this page
+  if (p.includes('statistic') || p.includes('figure') || p.includes('percentage') || p.includes('number')) {
+    let updated = currentPageHtml
+      .replace(/40%/g, '64%')
+      .replace(/84%/g, '91.5%')
+      .replace(/72%/g, '83.4%')
+      .replace(/15 kWp/g, '25 kWp')
+      .replace(/30 kWh/g, '50 kWh');
+
+    if (updated === currentPageHtml) {
+      updated = `${currentPageHtml}\n<div style="padding: 12px 16px; border-left: 3px solid #1447E6; background-color: #F8FAFC; margin: 12px 0;"><p style="margin: 0;"><strong>Updated Empirical Statistics (2026 Field Survey):</strong> Solar-battery hybrid adoption reached <strong>88.6% operational reliability</strong>, reducing annual diesel expenditure by <strong>78.4%</strong> across 120 surveyed facilities (p &lt; 0.01).</p></div>`;
+    }
+    return {
+      updatedPageHtml: `${updated}${refNote}`,
+      summary: `Updated the statistical figures and empirical metrics on Page ${pageIndex + 1}.`,
+    };
+  }
+
+  // 4. Insert a suitable heading
+  if (p.includes('heading') || p.includes('title')) {
+    const headingText =
+      instruction
+        .replace(/^(insert|add|create)\s+(a\s+)?(suitable\s+)?(heading|title)\s*(for|on|about|titled)?\s*/i, '')
+        .trim() || `Strategic Analysis & Empirical Overview (Page ${pageIndex + 1})`;
+    return {
+      updatedPageHtml: `<h2>${headingText.charAt(0).toUpperCase() + headingText.slice(1)}</h2>\n${currentPageHtml}${refNote}`,
+      summary: `Inserted a structured heading at the top of Page ${pageIndex + 1}.`,
+    };
+  }
+
+  // 5. Rewrite introduction on this page
+  if (p.includes('rewrite') && p.includes('introduction')) {
+    const temp = window.document.createElement('div');
+    temp.innerHTML = currentPageHtml;
+    const firstP = temp.querySelector('p');
+    if (firstP) {
+      firstP.innerHTML = `<strong>[Rewritten Introduction]:</strong> Within the contemporary landscape of <em>${docTitle}</em>, rigorous empirical evaluation demonstrates that integrating modern technological architectures with responsive institutional governance substantially elevates performance, reliability, and long-term sustainability across Nigerian operational centres.`;
+      return {
+        updatedPageHtml: `${temp.innerHTML}${refNote}`,
+        summary: `Rewrote the introductory paragraph directly on Page ${pageIndex + 1}.`,
+      };
+    }
+  }
+
+  // 6. Improve arrangement / make page look more professional
+  if (
+    p.includes('arrange') ||
+    p.includes('professional') ||
+    p.includes('format') ||
+    p.includes('layout') ||
+    p.includes('restructure')
+  ) {
+    return {
+      updatedPageHtml: `
+        <div style="border-left: 3px solid #0A194E; padding-left: 14px; margin-bottom: 16px;">
+          <p style="margin: 0; font-size: 9.5pt; text-transform: uppercase; letter-spacing: 0.08em; color: #1447E6; font-weight: 700;">Structured Executive Section — Page ${pageIndex + 1}</p>
+        </div>
+        ${currentPageHtml}
+        <div style="margin-top: 16px; padding: 12px 16px; background-color: #F8FAFC; border: 1px solid #E2E8F0;">
+          <p style="margin: 0; font-size: 10.5pt;"><strong>Key Page Takeaway:</strong> The analytical points presented on Page ${pageIndex + 1} have been arranged for executive clarity and academic coherence.</p>
+        </div>
+        ${refNote}
+      `,
+      summary: `Restructured and formatted Page ${pageIndex + 1} with a professional layout.`,
+    };
+  }
+
+  // Default direct page modification
+  return {
+    updatedPageHtml: `${currentPageHtml}\n<h3>${
+      instruction.length < 60 ? instruction : `Page ${pageIndex + 1} Enhancement`
+    }</h3><p>In direct execution of your instruction on Page ${pageIndex + 1} (<em>"${instruction}"</em>), the content and analytical structure of this page have been updated to strengthen clarity, empirical depth, and alignment with <strong>${docTitle}</strong>.</p>${refNote}`,
+    summary: `Applied your changes directly to Page ${pageIndex + 1}.`,
+  };
+}
+
+/**
+ * Requirement 6 & 7: Main AI Assistant Prompt Runner (Supports Entire Document, Selected Group + Specific Pages, or Individual Page, plus Uploaded Reference Documents)
+ */
 export function runWorkspaceAIPrompt(
   prompt: string,
   doc: DocumentItem,
   selectedText: string,
   pages?: string[],
-  explicitGroupId?: string
+  explicitGroupId?: string,
+  explicitPageIndices?: number[],
+  uploadedReferences: { name: string; extractedText: string }[] = []
 ): {
   summary: string;
   generatedHtml: string;
   targetGroupId?: string;
   targetGroupName?: string;
+  targetPageIndices?: number[];
+  directPageUpdates?: Record<number, string>;
 } {
   const p = prompt.toLowerCase();
-  const cleanSelection = selectedText.trim();
   const pageGroups: PageGroup[] = doc.metadata.pageGroups || [];
+  const currentPages = pages || [doc.content];
 
-  // 1. Check if a Page Group was explicitly selected or mentioned in the prompt (Section 11)
+  // 1. Check if specific page indices were selected (either individual page scope or subset of group pages)
+  if (explicitPageIndices && explicitPageIndices.length > 0) {
+    const directPageUpdates: Record<number, string> = {};
+    explicitPageIndices.forEach((pIdx) => {
+      if (pIdx >= 0 && pIdx < currentPages.length) {
+        const res = runPageLevelAI(
+          currentPages[pIdx],
+          pIdx,
+          prompt,
+          doc.title,
+          uploadedReferences
+        );
+        directPageUpdates[pIdx] = res.updatedPageHtml;
+      }
+    });
+
+    const matchedGroup = explicitGroupId
+      ? pageGroups.find((g) => g.id === explicitGroupId)
+      : undefined;
+
+    const firstUpdatedIdx = explicitPageIndices[0];
+    return {
+      summary: matchedGroup
+        ? `Updated ${matchedGroup.name} (Page${explicitPageIndices.length > 1 ? 's' : ''} ${explicitPageIndices.map((i) => i + 1).join(', ')}) directly in the workspace${uploadedReferences.length > 0 ? ` using ${uploadedReferences.length} reference file(s)` : ''}.`
+        : `Updated Page${explicitPageIndices.length > 1 ? 's' : ''} ${explicitPageIndices.map((i) => i + 1).join(', ')} directly in the workspace${uploadedReferences.length > 0 ? ` using ${uploadedReferences.length} reference file(s)` : ''}.`,
+      generatedHtml: directPageUpdates[firstUpdatedIdx] || '',
+      targetGroupId: matchedGroup?.id,
+      targetGroupName: matchedGroup?.name,
+      targetPageIndices: explicitPageIndices,
+      directPageUpdates,
+    };
+  }
+
+  // 2. Check if a Page Group was explicitly selected or mentioned in the prompt
   let matchedGroup: PageGroup | undefined = explicitGroupId
     ? pageGroups.find((g) => g.id === explicitGroupId)
     : undefined;
@@ -807,134 +1351,59 @@ export function runWorkspaceAIPrompt(
     matchedGroup = pageGroups.find((g) => {
       const gLower = g.name.toLowerCase();
       if (p.includes(gLower)) return true;
-      // Also match "group 1", "chapter one", "chapter two", "references", etc.
       const tokens = gLower.split(/[:\-–]/).map((t) => t.trim());
       return tokens.some((tok) => tok.length > 3 && p.includes(tok));
     });
   }
 
-  if (matchedGroup && pages && pages.length > 0) {
-    const groupHtml = matchedGroup.pageIndices
-      .map((idx) => pages[idx] || '')
-      .join('\n');
-    const plainGroupText = groupHtml
-      .replace(/<[^>]*>?/gm, ' ')
-      .replace(/\s+/g, ' ')
-      .trim();
+  if (matchedGroup && currentPages.length > 0) {
+    const directPageUpdates: Record<number, string> = {};
+    matchedGroup.pageIndices.forEach((pIdx) => {
+      if (pIdx >= 0 && pIdx < currentPages.length) {
+        const res = runPageLevelAI(
+          currentPages[pIdx],
+          pIdx,
+          prompt,
+          doc.title,
+          uploadedReferences
+        );
+        directPageUpdates[pIdx] = res.updatedPageHtml;
+      }
+    });
 
-    if (p.includes('summarise') || p.includes('summarize')) {
-      return {
-        summary: `Summarised ${matchedGroup.name} (Pages ${matchedGroup.pageIndices.map((i) => i + 1).join(', ')}).`,
-        generatedHtml: `${groupHtml}\n<h3>Summary of ${matchedGroup.name}</h3><p>${plainGroupText.slice(0, 240)}... Key findings and structural points within ${matchedGroup.name} have been synthesised for clarity.</p>`,
-        targetGroupId: matchedGroup.id,
-        targetGroupName: matchedGroup.name,
-      };
-    }
-
+    const firstIdx = matchedGroup.pageIndices[0] ?? 0;
     return {
-      summary: `Reviewed and improved ${matchedGroup.name} (Pages ${matchedGroup.pageIndices.map((i) => i + 1).join(', ')}) without modifying other groups.`,
-      generatedHtml: `${groupHtml}\n<p><em>[AI Group Refinement — ${matchedGroup.name}]:</em> Furthermore, the arguments and transitions within this section have been strengthened in accordance with your instruction ("${prompt}") to ensure cohesive academic flow across ${matchedGroup.name}.</p>`,
+      summary: `Updated ${matchedGroup.name} (Pages ${matchedGroup.pageIndices
+        .map((i) => i + 1)
+        .join(', ')}) directly in the workspace.`,
+      generatedHtml: directPageUpdates[firstIdx] || '',
       targetGroupId: matchedGroup.id,
       targetGroupName: matchedGroup.name,
+      targetPageIndices: matchedGroup.pageIndices,
+      directPageUpdates,
     };
   }
 
-  // 2. Highlighted Text Interaction (Section 6.1 – 6.3)
-  if (cleanSelection) {
-    if (p.includes('rewrite') || p.includes('academic') || p.includes('tone')) {
-      return {
-        summary: 'Rewritten selected text in a formal, scholarly academic tone.',
-        generatedHtml: `<p>Empirical scholarship increasingly underscores that ${
-          cleanSelection.charAt(0).toLowerCase() +
-          cleanSelection.slice(1).replace(/\.$/, '')
-        }, representing a pivotal analytical dimension within contemporary research and institutional policy.</p>`,
-      };
-    }
-
-    if (
-      p.includes('expand') ||
-      p.includes('elaborate') ||
-      p.includes('argument')
-    ) {
-      return {
-        summary:
-          'Expanded the selected passage with supporting arguments and institutional context.',
-        generatedHtml: `<p>${cleanSelection} Furthermore, recent empirical investigations across Nigerian tertiary and administrative institutions demonstrate that this phenomenon is reinforced by structural, technological, and behavioural factors. When evaluated over a multi-year horizon, stakeholders that implement structured frameworks around this principle consistently achieve stronger, verifiable outcomes.</p>`,
-      };
-    }
-
-    if (
-      p.includes('summarise') ||
-      p.includes('summarize') ||
-      p.includes('shorten')
-    ) {
-      const words = cleanSelection.split(/\s+/);
-      const shortText =
-        words.length > 18
-          ? words.slice(0, 18).join(' ') + '...'
-          : cleanSelection;
-      return {
-        summary: 'Condensed the selected passage into a concise summary.',
-        generatedHtml: `<p><strong>Key Point:</strong> ${shortText}</p>`,
-      };
-    }
-
-    if (
-      p.includes('grammar') ||
-      p.includes('spelling') ||
-      p.includes('correct') ||
-      p.includes('fix')
-    ) {
-      return {
-        summary: 'Corrected grammar, punctuation, and sentence clarity.',
-        generatedHtml: `<p>${cleanSelection.replace(/\s+/g, ' ').trim()}</p>`,
-      };
-    }
-
-    if (p.includes('explain') || p.includes('simplify')) {
-      return {
-        summary:
-          'Provided a clear, accessible explanation of the selected passage.',
-        generatedHtml: `<p>${cleanSelection}</p><p><em>In simple terms:</em> This means that the core factors described above directly shape how effectively the system performs in everyday practice.</p>`,
-      };
-    }
-
-    return {
-      summary: `Applied your instruction ("${prompt}") to the selected passage.`,
-      generatedHtml: `<p>${cleanSelection} — refined and expanded to address: ${prompt}.</p>`,
-    };
-  }
-
-  // 3. Whole-document prompts
-  if (p.includes('summarise') || p.includes('summarize')) {
-    return {
-      summary: 'Generated a concise executive summary of the current document.',
-      generatedHtml: `<h3>Executive Summary</h3><p>This document (<em>${doc.title}</em>) synthesizes the core background, analytical framework, empirical observations, and actionable recommendations required for academic and professional submission.</p>`,
-    };
-  }
-
-  if (p.includes('continue') || p.includes('expand')) {
-    return {
-      summary: 'Continued writing from the current document context.',
-      generatedHtml: `<p>Building upon the preceding analysis, empirical observations across Nigerian institutions confirm that sustained alignment between policy design and frontline implementation significantly improves long-term outcomes. Consequently, integrating structured evaluation metrics with continuous capacity building remains essential.</p>`,
-    };
-  }
-
-  if (p.includes('reference') || p.includes('citation') || p.includes('apa')) {
-    return {
-      summary: `Generated formatted references (${
-        doc.metadata.referencingStyle || 'APA 7th Edition'
-      }).`,
-      generatedHtml: `<h2>References (${
-        doc.metadata.referencingStyle || 'APA 7th Edition'
-      })</h2><p>Adebowale, R. T., &amp; Olatunji, S. A. (2025). Empirical dimensions and policy implications of ${doc.title.toLowerCase()}. <em>Nigerian Journal of Applied Research</em>, 22(3), 114–132.</p><p>Chukwuma, E. N., &amp; Danjuma, Y. I. (2024). Institutional capacity and socio-economic outcomes in West Africa. <em>Lagos Review of Social &amp; Management Sciences</em>, 15(1), 41–59.</p>`,
-    };
-  }
+  // 3. Whole-Document Scope (Applies to the active/last page or across the document)
+  const lastIdx = Math.max(0, currentPages.length - 1);
+  const pageResult = runPageLevelAI(
+    currentPages[lastIdx] || '',
+    lastIdx,
+    prompt,
+    doc.title,
+    uploadedReferences
+  );
 
   return {
-    summary: `Generated new section for: "${prompt}"`,
-    generatedHtml: `<h2>${
-      prompt.length < 70 ? prompt : 'Additional Section'
-    }</h2><p>In examining <strong>${prompt}</strong> within the context of <em>${doc.title}</em>, both theoretical literature and field evidence highlight the importance of structured methodology, institutional support, and measurable performance benchmarks.</p>`,
+    summary: `${pageResult.summary}${
+      uploadedReferences.length > 0
+        ? ` (Integrated ${uploadedReferences.map((r) => r.name).join(', ')})`
+        : ''
+    }`,
+    generatedHtml: pageResult.updatedPageHtml,
+    targetPageIndices: [lastIdx],
+    directPageUpdates: {
+      [lastIdx]: pageResult.updatedPageHtml,
+    },
   };
 }
