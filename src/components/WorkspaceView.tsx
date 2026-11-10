@@ -42,6 +42,10 @@ import {
   Paperclip,
   FileText,
   HardDriveDownload,
+  Camera,
+  Save,
+  HardDrive,
+  AlertCircle,
 } from 'lucide-react';
 import {
   AIMessage,
@@ -160,8 +164,11 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
   const tableBtnRef = useRef<HTMLButtonElement>(null);
   const shapeBtnRef = useRef<HTMLButtonElement>(null);
   const imageInputRef = useRef<HTMLInputElement>(null);
+  const cameraInputRef = useRef<HTMLInputElement>(null);
   const aiTextareaRef = useRef<HTMLTextAreaElement>(null);
   const activeTableCellRef = useRef<HTMLTableCellElement | null>(null);
+  const videoPreviewRef = useRef<HTMLVideoElement>(null);
+  const cameraStreamRef = useRef<MediaStream | null>(null);
 
   const [title, setTitle] = useState(doc.title);
   const [pages, setPages] = useState<string[]>(() =>
@@ -170,6 +177,32 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
   const [saveState, setSaveState] = useState<SyncStatus>(
     isOnline ? 'saved' : 'offline-pending'
   );
+  // Requirement 1: Unsaved changes protection
+  const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
+  const [showUnsavedModal, setShowUnsavedModal] = useState(false);
+
+  // Requirement 2: Toolbar Heading sync (H1, H2, H3, P)
+  const [currentHeading, setCurrentHeading] = useState<'P' | 'H1' | 'H2' | 'H3'>('P');
+
+  // Requirement 8: Camera option for image upload
+  const [showImageDropdown, setShowImageDropdown] = useState(false);
+  const [showCameraModal, setShowCameraModal] = useState(false);
+
+  // Requirement 9: Shape Editing mode
+  const [isEditingShape, setIsEditingShape] = useState(false);
+
+  // Requirement 11: Unified Undo and Redo History
+  const historyRef = useRef<
+    {
+      pages: string[];
+      drawings: DrawingElement[];
+      images: CanvasImageElement[];
+      title: string;
+    }[]
+  >([]);
+  const historyIndexRef = useRef<number>(-1);
+  const [canUndo, setCanUndo] = useState(false);
+  const [canRedo, setCanRedo] = useState(false);
   const [showExportMenu, setShowExportMenu] = useState(false);
   const [exportScope, setExportScope] = useState<'document' | 'group' | 'page'>(
     'document'
@@ -325,13 +358,80 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
   const [editingGroupId, setEditingGroupId] = useState<string | null>(null);
   const [editingGroupName, setEditingGroupName] = useState('');
 
+  // Requirement 11: Unified Undo and Redo History
+  const pushHistory = useCallback(
+    (
+      newPages: string[],
+      newDrawings: DrawingElement[] = drawings,
+      newImages: CanvasImageElement[] = canvasImages,
+      newTitle: string = title
+    ) => {
+      const nextIndex = historyIndexRef.current + 1;
+      const newHistory = historyRef.current.slice(0, nextIndex);
+      newHistory.push({
+        pages: [...newPages],
+        drawings: [...newDrawings],
+        images: [...newImages],
+        title: newTitle,
+      });
+      if (newHistory.length > 50) newHistory.shift();
+      historyRef.current = newHistory;
+      historyIndexRef.current = newHistory.length - 1;
+      setCanUndo(historyIndexRef.current > 0);
+      setCanRedo(false);
+      setHasUnsavedChanges(true);
+    },
+    [drawings, canvasImages, title]
+  );
+
+  const handleUndo = useCallback(() => {
+    if (historyIndexRef.current > 0) {
+      historyIndexRef.current -= 1;
+      const snapshot = historyRef.current[historyIndexRef.current];
+      setPages(snapshot.pages);
+      setDrawings(snapshot.drawings);
+      setCanvasImages(snapshot.images);
+      setTitle(snapshot.title);
+      snapshot.pages.forEach((html, i) => {
+        if (pageRefs.current[i]) {
+          pageRefs.current[i]!.innerHTML = html;
+        }
+      });
+      setCanUndo(historyIndexRef.current > 0);
+      setCanRedo(true);
+      setHasUnsavedChanges(true);
+    }
+  }, []);
+
+  const handleRedo = useCallback(() => {
+    if (historyIndexRef.current < historyRef.current.length - 1) {
+      historyIndexRef.current += 1;
+      const snapshot = historyRef.current[historyIndexRef.current];
+      setPages(snapshot.pages);
+      setDrawings(snapshot.drawings);
+      setCanvasImages(snapshot.images);
+      setTitle(snapshot.title);
+      snapshot.pages.forEach((html, i) => {
+        if (pageRefs.current[i]) {
+          pageRefs.current[i]!.innerHTML = html;
+        }
+      });
+      setCanUndo(true);
+      setCanRedo(historyIndexRef.current < historyRef.current.length - 1);
+      setHasUnsavedChanges(true);
+    }
+  }, []);
+
   // Re-initialize when switching document
   useEffect(() => {
+    const initPages = splitHtmlIntoInitialPages(doc.content, doc.metadata.pages);
+    const initDrawings = doc.metadata.drawings || [];
+    const initImages = doc.metadata.images || [];
     setTitle(doc.title);
-    setPages(splitHtmlIntoInitialPages(doc.content, doc.metadata.pages));
+    setPages(initPages);
     setLayout(doc.metadata.layout || DEFAULT_LAYOUT);
-    setDrawings(doc.metadata.drawings || []);
-    setCanvasImages(doc.metadata.images || []);
+    setDrawings(initDrawings);
+    setCanvasImages(initImages);
     setPageGroups(
       (doc.metadata.pageGroups || []).map((g) => ({
         ...g,
@@ -343,7 +443,63 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
     setShowTextAiPopup(false);
     setActivePageAiIdx(null);
     savedRangeRef.current = null;
+    setHasUnsavedChanges(false);
+
+    historyRef.current = [
+      {
+        pages: initPages,
+        drawings: initDrawings,
+        images: initImages,
+        title: doc.title,
+      },
+    ];
+    historyIndexRef.current = 0;
+    setCanUndo(false);
+    setCanRedo(false);
   }, [doc.id]);
+
+  // Requirement 3: Automatically hide AI icon as soon as text is deselected anywhere
+  useEffect(() => {
+    const handleSelectionChange = () => {
+      const sel = window.getSelection();
+      if (!sel || sel.isCollapsed || sel.rangeCount === 0) {
+        if (!showTextAiPopup) {
+          setHighlightedText('');
+          setHighlightBadgePos(null);
+        }
+      }
+    };
+    window.document.addEventListener('selectionchange', handleSelectionChange);
+    return () => {
+      window.document.removeEventListener('selectionchange', handleSelectionChange);
+    };
+  }, [showTextAiPopup]);
+
+  // Requirement 4 & 11: Keyboard shortcuts (Ctrl+Z, Ctrl+Y, Ctrl+Q)
+  useEffect(() => {
+    const handleGlobalShortcuts = (e: KeyboardEvent) => {
+      const isCtrl = e.ctrlKey || e.metaKey;
+      if (isCtrl) {
+        if (e.key === 'z' || e.key === 'Z') {
+          if (e.shiftKey) {
+            e.preventDefault();
+            handleRedo();
+          } else {
+            e.preventDefault();
+            handleUndo();
+          }
+        } else if (e.key === 'y' || e.key === 'Y') {
+          e.preventDefault();
+          handleRedo();
+        } else if (e.key === 'q' || e.key === 'Q') {
+          e.preventDefault();
+          window.document.execCommand('formatBlock', false, '<blockquote>');
+        }
+      }
+    };
+    window.addEventListener('keydown', handleGlobalShortcuts);
+    return () => window.removeEventListener('keydown', handleGlobalShortcuts);
+  }, [handleUndo, handleRedo]);
 
   // Populate DOM page contents when pages array updates, but NEVER overwrite the active element while the user is typing/editing (prevents Space & cursor jumping)
   useEffect(() => {
@@ -360,7 +516,7 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
     });
   }, [pages]);
 
-  // Requirement 4: Keyboard interactions (Backspace/Delete deletes selected shape or image)
+  // Requirement 4 & 9: Keyboard interactions (Backspace/Delete deletes selected shape or image)
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       const activeEl = window.document.activeElement as HTMLElement | null;
@@ -376,15 +532,18 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
           e.stopPropagation();
           setDrawings((prev) => {
             const next = prev.filter((d) => d.id !== selectedDrawingId);
+            pushHistory(pages, next, canvasImages);
             triggerAutoSave({ overrideDrawings: next });
             return next;
           });
           setSelectedDrawingId(null);
+          setIsEditingShape(false);
         } else if (selectedImageId) {
           e.preventDefault();
           e.stopPropagation();
           setCanvasImages((prev) => {
             const next = prev.filter((img) => img.id !== selectedImageId);
+            pushHistory(pages, drawings, next);
             triggerAutoSave({ overrideImages: next });
             return next;
           });
@@ -394,7 +553,7 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [selectedDrawingId, selectedImageId]);
+  }, [selectedDrawingId, selectedImageId, pages, drawings, canvasImages, pushHistory]);
 
   // Requirement 11: Reliable autosaving and beforeunload flush
   useEffect(() => {
@@ -408,11 +567,15 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
   // Close overlay dropdowns on outside click
   useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
+      const target = e.target as HTMLElement;
       if (
         exportMenuRef.current &&
-        !exportMenuRef.current.contains(e.target as Node)
+        !exportMenuRef.current.contains(target as Node)
       ) {
         setShowExportMenu(false);
+      }
+      if (!target.closest('.nc-image-dropdown-btn') && !target.closest('.nc-image-dropdown-menu')) {
+        setShowImageDropdown(false);
       }
     };
     window.document.addEventListener('mousedown', handleClickOutside);
@@ -511,8 +674,8 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
     const padRightPx = Math.round(layout.marginRightMm * 3.2);
 
     const maxBodyHeight = Math.max(
-      420,
-      heightPx - padTopPx - padBottomPx - 120
+      480,
+      heightPx - padTopPx - padBottomPx - (layout.headerSpacingPx || 18) - (layout.footerSpacingPx || 24) - 40
     );
 
     return {
@@ -528,22 +691,32 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
 
   const checkAndFlowPages = useCallback(
     (pageIndex: number) => {
+      setHasUnsavedChanges(true);
       const pageEl = pageRefs.current[pageIndex];
       if (!pageEl) return;
 
       const { maxBodyHeight } = getPageDimensions(pageIndex);
 
+      // Only flow if content genuinely overflows printable boundary with generous threshold
       if (
-        pageEl.scrollHeight > maxBodyHeight &&
+        pageEl.scrollHeight > maxBodyHeight + 40 &&
         pageEl.children.length > 1
       ) {
         const movedNodes: string[] = [];
+        const activeNode = window.document.activeElement;
         while (
           pageEl.scrollHeight > maxBodyHeight &&
           pageEl.children.length > 1
         ) {
-          const lastChild = pageEl.lastElementChild;
+          const lastChild = pageEl.lastElementChild as HTMLElement | null;
           if (!lastChild) break;
+          // Never move the child element the user is actively typing inside
+          if (
+            activeNode &&
+            (lastChild === activeNode || lastChild.contains(activeNode))
+          ) {
+            break;
+          }
           movedNodes.unshift(lastChild.outerHTML);
           pageEl.removeChild(lastChild);
         }
@@ -600,14 +773,47 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
     }
 
     const sel = window.getSelection();
-    if (!sel || sel.rangeCount === 0) return;
+    if (!sel || sel.rangeCount === 0 || sel.isCollapsed) {
+      if (!showTextAiPopup) {
+        setHighlightedText('');
+        setHighlightBadgePos(null);
+      }
+      return;
+    }
 
     const range = sel.getRangeAt(0);
     const pageEl = pageRefs.current[pageIdx];
-    if (!pageEl || !pageEl.contains(range.commonAncestorContainer)) return;
+    if (!pageEl || !pageEl.contains(range.commonAncestorContainer)) {
+      if (!showTextAiPopup) {
+        setHighlightedText('');
+        setHighlightBadgePos(null);
+      }
+      return;
+    }
 
     savedRangeRef.current = range.cloneRange();
     const text = sel.toString().trim();
+
+    // Check heading under cursor to synchronize toolbar dropdown (Requirement 2)
+    let node: Node | null = range.startContainer;
+    let foundHeading: 'P' | 'H1' | 'H2' | 'H3' = 'P';
+    while (node && node !== pageEl) {
+      if (node.nodeType === Node.ELEMENT_NODE) {
+        const elTag = (node as HTMLElement).tagName.toUpperCase();
+        if (elTag === 'H1') {
+          foundHeading = 'H1';
+          break;
+        } else if (elTag === 'H2') {
+          foundHeading = 'H2';
+          break;
+        } else if (elTag === 'H3') {
+          foundHeading = 'H3';
+          break;
+        }
+      }
+      node = node.parentNode;
+    }
+    setCurrentHeading(foundHeading);
 
     if (text.length >= 2) {
       const rect = range.getBoundingClientRect();
@@ -617,6 +823,11 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
         top: rect.top,
         left: rect.right,
       });
+    } else {
+      if (!showTextAiPopup) {
+        setHighlightedText('');
+        setHighlightBadgePos(null);
+      }
     }
   };
 
@@ -711,7 +922,7 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
   };
 
   // =========================================================================
-  // FORMATTING & TABLE EDITING (Requirement 13: Word-style Table Resizing)
+  // FORMATTING & TABLE EDITING (Requirement 2: Heading 1, 2, 3 Sync & Word-style Table Resizing)
   // =========================================================================
   const execFormat = (command: string, value?: string) => {
     const activeEl = pageRefs.current[activePageIdxRef.current];
@@ -719,13 +930,39 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
       activeEl.focus();
       if (savedRangeRef.current) {
         const sel = window.getSelection();
-        if (sel && sel.rangeCount === 0) {
-          sel.addRange(savedRangeRef.current);
+        if (sel) {
+          try {
+            sel.removeAllRanges();
+            sel.addRange(savedRangeRef.current);
+          } catch {
+            // ignore
+          }
         }
       }
     }
-    window.document.execCommand(command, false, value);
-    checkAndFlowPages(activePageIdxRef.current);
+
+    if (command === 'formatBlock' && value) {
+      const tag = value.replace(/[<>]/g, '').toLowerCase();
+      setCurrentHeading(tag.toUpperCase() as 'P' | 'H1' | 'H2' | 'H3');
+      try {
+        window.document.execCommand('formatBlock', false, `<${tag}>`);
+      } catch {
+        try {
+          window.document.execCommand('formatBlock', false, tag);
+        } catch {
+          // fallback
+        }
+      }
+    } else {
+      window.document.execCommand(command, false, value);
+    }
+
+    setHasUnsavedChanges(true);
+    const updatedPages = pages.map((p, i) =>
+      pageRefs.current[i] ? pageRefs.current[i]!.innerHTML : p
+    );
+    pushHistory(updatedPages);
+    triggerAutoSave();
   };
 
   const handleInsertConfiguredTable = (rows: number, cols: number) => {
@@ -883,23 +1120,11 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
     triggerAutoSave();
   };
 
-  // Interactive Mouse Dragging of Table Column & Row Borders (Requirement 13)
+  // Interactive Mouse & Touch Dragging of Table Column & Row Borders (Requirement 10)
   const handlePageMouseMoveForTableResize = (
     pageIdx: number,
     e: React.MouseEvent<HTMLDivElement>
   ) => {
-    if (tableResizeDragRef.current) {
-      const drag = tableResizeDragRef.current;
-      if (drag.type === 'col') {
-        const nextW = Math.max(45, drag.origSize + (e.clientX - drag.startX));
-        drag.targetEl.style.width = `${Math.round(nextW)}px`;
-      } else {
-        const nextH = Math.max(24, drag.origSize + (e.clientY - drag.startY));
-        drag.targetEl.style.height = `${Math.round(nextH)}px`;
-      }
-      return;
-    }
-
     const target = e.target as HTMLElement;
     const cell = target.closest?.('td, th') as HTMLTableCellElement | null;
     const pageEl = pageRefs.current[pageIdx];
@@ -909,8 +1134,8 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
     }
 
     const rect = cell.getBoundingClientRect();
-    const nearRightEdge = Math.abs(e.clientX - rect.right) <= 6;
-    const nearBottomEdge = Math.abs(e.clientY - rect.bottom) <= 6;
+    const nearRightEdge = Math.abs(e.clientX - rect.right) <= 8;
+    const nearBottomEdge = Math.abs(e.clientY - rect.bottom) <= 8;
 
     if (nearRightEdge) {
       pageEl.style.cursor = 'col-resize';
@@ -923,26 +1148,63 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
 
   const handlePageMouseDownForTableResize = (
     pageIdx: number,
-    e: React.MouseEvent<HTMLDivElement>
+    e: React.MouseEvent<HTMLDivElement> | React.TouchEvent<HTMLDivElement>
   ) => {
+    const clientX = 'touches' in e ? e.touches[0].clientX : e.clientX;
+    const clientY = 'touches' in e ? e.touches[0].clientY : e.clientY;
     const target = e.target as HTMLElement;
     const cell = target.closest?.('td, th') as HTMLTableCellElement | null;
     if (!cell) return;
 
     const rect = cell.getBoundingClientRect();
-    const nearRightEdge = Math.abs(e.clientX - rect.right) <= 6;
-    const nearBottomEdge = Math.abs(e.clientY - rect.bottom) <= 6;
+    const nearRightEdge = Math.abs(clientX - rect.right) <= 8;
+    const nearBottomEdge = Math.abs(clientY - rect.bottom) <= 8;
 
     if (nearRightEdge) {
       e.preventDefault();
+      const colIdx = cell.cellIndex;
+      const table = cell.closest('table');
       tableResizeDragRef.current = {
         type: 'col',
         targetEl: cell,
-        startX: e.clientX,
-        startY: e.clientY,
+        startX: clientX,
+        startY: clientY,
         origSize: rect.width,
         pageIdx,
       };
+
+      const handleGlobalMouseMove = (moveEvent: MouseEvent | TouchEvent) => {
+        const curX =
+          'touches' in moveEvent
+            ? moveEvent.touches[0].clientX
+            : moveEvent.clientX;
+        if (!tableResizeDragRef.current) return;
+        const diff = curX - tableResizeDragRef.current.startX;
+        const nextW = Math.max(40, tableResizeDragRef.current.origSize + diff);
+        if (table) {
+          const rows = Array.from(table.rows);
+          rows.forEach((row) => {
+            if (row.cells[colIdx]) {
+              row.cells[colIdx].style.width = `${Math.round(nextW)}px`;
+            }
+          });
+        }
+      };
+
+      const handleGlobalMouseUp = () => {
+        window.removeEventListener('mousemove', handleGlobalMouseMove);
+        window.removeEventListener('mouseup', handleGlobalMouseUp);
+        window.removeEventListener('touchmove', handleGlobalMouseMove);
+        window.removeEventListener('touchend', handleGlobalMouseUp);
+        tableResizeDragRef.current = null;
+        setHasUnsavedChanges(true);
+        triggerAutoSave();
+      };
+
+      window.addEventListener('mousemove', handleGlobalMouseMove);
+      window.addEventListener('mouseup', handleGlobalMouseUp);
+      window.addEventListener('touchmove', handleGlobalMouseMove);
+      window.addEventListener('touchend', handleGlobalMouseUp);
     } else if (nearBottomEdge) {
       e.preventDefault();
       const row = cell.closest('tr') as HTMLElement;
@@ -950,11 +1212,40 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
         tableResizeDragRef.current = {
           type: 'row',
           targetEl: row,
-          startX: e.clientX,
-          startY: e.clientY,
+          startX: clientX,
+          startY: clientY,
           origSize: row.getBoundingClientRect().height,
           pageIdx,
         };
+
+        const handleGlobalMouseMove = (moveEvent: MouseEvent | TouchEvent) => {
+          const curY =
+            'touches' in moveEvent
+              ? moveEvent.touches[0].clientY
+              : moveEvent.clientY;
+          if (!tableResizeDragRef.current) return;
+          const diff = curY - tableResizeDragRef.current.startY;
+          const nextH = Math.max(26, tableResizeDragRef.current.origSize + diff);
+          row.style.height = `${Math.round(nextH)}px`;
+          Array.from(row.children).forEach((c) => {
+            (c as HTMLElement).style.height = `${Math.round(nextH)}px`;
+          });
+        };
+
+        const handleGlobalMouseUp = () => {
+          window.removeEventListener('mousemove', handleGlobalMouseMove);
+          window.removeEventListener('mouseup', handleGlobalMouseUp);
+          window.removeEventListener('touchmove', handleGlobalMouseMove);
+          window.removeEventListener('touchend', handleGlobalMouseUp);
+          tableResizeDragRef.current = null;
+          setHasUnsavedChanges(true);
+          triggerAutoSave();
+        };
+
+        window.addEventListener('mousemove', handleGlobalMouseMove);
+        window.addEventListener('mouseup', handleGlobalMouseUp);
+        window.addEventListener('touchmove', handleGlobalMouseMove);
+        window.addEventListener('touchend', handleGlobalMouseUp);
       }
     }
   };
@@ -1587,14 +1878,134 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
   const activeGroupObj =
     pageGroups.find((g) => g.id === aiTargetGroupId) || null;
 
-  // Requirement 11: Save all state before navigating away
+  // Requirement 1: Unsaved Changes Protection on exit
   const handleBackSafely = () => {
+    if (hasUnsavedChanges) {
+      setShowUnsavedModal(true);
+    } else {
+      onBack();
+    }
+  };
+
+  const handleConfirmSaveAndLeave = () => {
     triggerAutoSave();
+    setHasUnsavedChanges(false);
+    setShowUnsavedModal(false);
+    setTimeout(() => {
+      onBack();
+    }, 280);
+  };
+
+  const handleConfirmSaveLocallyAndLeave = async () => {
+    triggerAutoSave();
+    if (onSaveToComputer) {
+      try {
+        await onSaveToComputer({
+          ...doc,
+          title,
+          content: getCombinedCleanHtml(),
+          metadata: {
+            ...doc.metadata,
+            layout,
+            drawings,
+            images: canvasImages,
+            pageGroups,
+            pages,
+          },
+        });
+      } catch {
+        // ignore
+      }
+    }
+    setHasUnsavedChanges(false);
+    setShowUnsavedModal(false);
+    setTimeout(() => {
+      onBack();
+    }, 280);
+  };
+
+  const handleConfirmDiscardAndLeave = () => {
+    setHasUnsavedChanges(false);
+    setShowUnsavedModal(false);
     onBack();
+  };
+
+  // Requirement 8: Device Camera Capture Handlers
+  const startLiveCamera = async () => {
+    setShowImageDropdown(false);
+    setShowCameraModal(true);
+    try {
+      if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: 'environment' },
+          audio: false,
+        });
+        cameraStreamRef.current = stream;
+        if (videoPreviewRef.current) {
+          videoPreviewRef.current.srcObject = stream;
+          videoPreviewRef.current.play();
+        }
+      } else {
+        cameraInputRef.current?.click();
+        setShowCameraModal(false);
+      }
+    } catch {
+      cameraInputRef.current?.click();
+      setShowCameraModal(false);
+    }
+  };
+
+  const stopLiveCamera = () => {
+    if (cameraStreamRef.current) {
+      cameraStreamRef.current.getTracks().forEach((track) => track.stop());
+      cameraStreamRef.current = null;
+    }
+    setShowCameraModal(false);
+  };
+
+  const capturePhotoFromCamera = () => {
+    if (!videoPreviewRef.current) return;
+    const video = videoPreviewRef.current;
+    const canvas = window.document.createElement('canvas');
+    canvas.width = video.videoWidth || 640;
+    canvas.height = video.videoHeight || 480;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+    const dataUrl = canvas.toDataURL('image/jpeg', 0.92);
+    stopLiveCamera();
+
+    const maxZ = Math.max(
+      10,
+      ...drawings.map((d) => d.zIndex || 10),
+      ...canvasImages.map((im) => im.zIndex || 10)
+    );
+    const newImg: CanvasImageElement = {
+      id: `img-${Date.now()}`,
+      pageIndex: activePageIdxRef.current,
+      src: dataUrl,
+      x: 120,
+      y: 140,
+      width: Math.min(320, canvas.width),
+      height: Math.round(
+        Math.min(320, canvas.width) / (canvas.width / canvas.height)
+      ),
+      aspectRatio: canvas.width / canvas.height,
+      zIndex: maxZ + 1,
+      caption: `Camera Photo (${getCurrentFormattedDate()})`,
+    };
+    const nextImages = [...canvasImages, newImg];
+    setCanvasImages(nextImages);
+    setSelectedImageId(newImg.id);
+    setSelectedDrawingId(null);
+    setHasUnsavedChanges(true);
+    pushHistory(pages, drawings, nextImages);
+    triggerAutoSave({ overrideImages: nextImages });
   };
 
   const renderShapeElement = (d: DrawingElement) => {
     const isSel = selectedDrawingId === d.id;
+    const isEdit = isSel && isEditingShape;
     const dash =
       d.lineStyle === 'dashed'
         ? '6,4'
@@ -1615,7 +2026,18 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
         key={d.id}
         style={{
           pointerEvents: 'all',
-          cursor: 'move',
+          cursor: isEdit ? 'crosshair' : 'move',
+        }}
+        onClick={(e) => {
+          e.stopPropagation();
+          setSelectedDrawingId(d.id);
+          setSelectedImageId(null);
+        }}
+        onDoubleClick={(e) => {
+          e.stopPropagation();
+          setSelectedDrawingId(d.id);
+          setSelectedImageId(null);
+          setIsEditingShape(true);
         }}
         onMouseDown={(e) => {
           e.stopPropagation();
@@ -1797,6 +2219,15 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
         onChange={handleImageFileSelect}
         style={{ display: 'none' }}
       />
+      {/* Hidden File Input for Device Camera Capture (Requirement 8) */}
+      <input
+        ref={cameraInputRef}
+        type="file"
+        accept="image/*"
+        capture="environment"
+        onChange={handleImageFileSelect}
+        style={{ display: 'none' }}
+      />
 
       {/* =====================================================================
           TOP WORKSPACE HEADER (Includes Local File Save per Requirement 14)
@@ -1868,6 +2299,7 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
             value={title}
             onChange={(e) => {
               setTitle(e.target.value);
+              setHasUnsavedChanges(true);
               triggerAutoSave({ overrideTitle: e.target.value });
             }}
             style={{
@@ -1941,21 +2373,34 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
             flexShrink: 0,
           }}
         >
+          {/* Requirement 11: Unified Undo and Redo Controls */}
           <button
             onMouseDown={(e) => e.preventDefault()}
-            onClick={() => execFormat('undo')}
+            onClick={handleUndo}
+            disabled={!canUndo}
             className="btn-ed-subtle"
-            style={{ height: '32px', padding: '0 8px' }}
-            title="Undo"
+            style={{
+              height: '32px',
+              padding: '0 8px',
+              opacity: canUndo ? 1 : 0.4,
+              cursor: canUndo ? 'pointer' : 'default',
+            }}
+            title="Undo (Ctrl+Z)"
           >
             <Undo2 size={14} />
           </button>
           <button
             onMouseDown={(e) => e.preventDefault()}
-            onClick={() => execFormat('redo')}
+            onClick={handleRedo}
+            disabled={!canRedo}
             className="btn-ed-subtle"
-            style={{ height: '32px', padding: '0 8px' }}
-            title="Redo"
+            style={{
+              height: '32px',
+              padding: '0 8px',
+              opacity: canRedo ? 1 : 0.4,
+              cursor: canRedo ? 'pointer' : 'default',
+            }}
+            title="Redo (Ctrl+Y)"
           >
             <Redo2 size={14} />
           </button>
@@ -2306,10 +2751,10 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
         </select>
 
         <select
+          value={currentHeading}
           onChange={(e) => execFormat('formatBlock', e.target.value)}
-          defaultValue="P"
           className="ed-select"
-          style={{ width: '104px', padding: '4px 7px', fontSize: '12px' }}
+          style={{ width: '108px', padding: '4px 7px', fontSize: '12px' }}
         >
           <option value="P">Normal</option>
           <option value="H1">Heading 1</option>
@@ -2460,17 +2905,80 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
           <ChevronDown size={11} />
         </button>
 
-        {/* Requirement 10: Image Import Button (Also supports Drag & Drop onto page) */}
-        <button
-          onMouseDown={(e) => e.preventDefault()}
-          onClick={() => imageInputRef.current?.click()}
-          className="btn-ed-subtle"
-          style={{ padding: '5px 9px' }}
-          title="Import Image from Files (or drag & drop an image onto any page)"
-        >
-          <ImageIcon size={13} color="var(--accent-blue)" />
-          <span>Image</span>
-        </button>
+        {/* Requirement 8: Image & Camera Upload Options */}
+        <div style={{ position: 'relative' }}>
+          <button
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => setShowImageDropdown((p) => !p)}
+            className="btn-ed-subtle nc-image-dropdown-btn"
+            style={{
+              padding: '5px 9px',
+              backgroundColor: showImageDropdown
+                ? 'var(--bg-stone)'
+                : 'transparent',
+              gap: '4px',
+            }}
+            title="Insert Image from Device or Camera"
+          >
+            <ImageIcon size={13} color="var(--accent-blue)" />
+            <span>Image</span>
+            <ChevronDown size={11} />
+          </button>
+
+          {showImageDropdown && (
+            <div
+              className="no-print nc-image-dropdown-menu"
+              style={{
+                position: 'absolute',
+                top: '100%',
+                left: 0,
+                marginTop: '4px',
+                zIndex: 120,
+                backgroundColor: 'var(--bg-ivory)',
+                border: '1px solid var(--border-stone)',
+                boxShadow: '0 4px 14px rgba(10, 25, 78, 0.12)',
+                display: 'flex',
+                flexDirection: 'column',
+                minWidth: '190px',
+                padding: '4px',
+              }}
+            >
+              <button
+                type="button"
+                onClick={() => {
+                  setShowImageDropdown(false);
+                  imageInputRef.current?.click();
+                }}
+                className="btn-ed-subtle"
+                style={{
+                  justifyContent: 'flex-start',
+                  padding: '7px 10px',
+                  fontSize: '11.5px',
+                  gap: '8px',
+                  width: '100%',
+                }}
+              >
+                <HardDrive size={13} color="var(--accent-blue)" />
+                <span>Upload from Device</span>
+              </button>
+              <button
+                type="button"
+                onClick={startLiveCamera}
+                className="btn-ed-subtle"
+                style={{
+                  justifyContent: 'flex-start',
+                  padding: '7px 10px',
+                  fontSize: '11.5px',
+                  gap: '8px',
+                  width: '100%',
+                }}
+              >
+                <Camera size={13} color="var(--accent-blue)" />
+                <span>Take Photo with Camera</span>
+              </button>
+            </div>
+          )}
+        </div>
 
         {/* Requirement 11 & 13: Shape Dropdown Overlay Button */}
         <button
@@ -3290,7 +3798,22 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
         {/* ===================================================================
             MULTI-PAGE DOCUMENT EDITOR CANVAS
         =================================================================== */}
-        <div className="doc-workspace-canvas-wrap" style={{ flex: 1 }}>
+        <div
+          className="doc-workspace-canvas-wrap"
+          style={{ flex: 1 }}
+          onClick={(e) => {
+            const target = e.target as HTMLElement;
+            if (
+              !target.closest('g') &&
+              !target.closest('.canvas-image-wrap') &&
+              !target.closest('.nc-element-layer-toolbar')
+            ) {
+              setSelectedDrawingId(null);
+              setSelectedImageId(null);
+              setIsEditingShape(false);
+            }
+          }}
+        >
           {pages.map((_, pageIdx) => {
             const dim = getPageDimensions(pageIdx);
             const belongingGroups = pageGroups.filter((g) =>
@@ -3307,6 +3830,18 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
               <div
                 key={pageIdx}
                 className="doc-a4-page"
+                onClick={(e) => {
+                  const target = e.target as HTMLElement;
+                  if (
+                    !target.closest('g') &&
+                    !target.closest('.canvas-image-wrap') &&
+                    !target.closest('.nc-element-layer-toolbar')
+                  ) {
+                    setSelectedDrawingId(null);
+                    setSelectedImageId(null);
+                    setIsEditingShape(false);
+                  }
+                }}
                 onDragOver={(e) => e.preventDefault()}
                 onDrop={(e) => handlePageDrop(pageIdx, e)}
                 onMouseMove={(e) => handleCanvasPointerMove(pageIdx, e)}
@@ -3559,21 +4094,58 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
                   onFocus={() => {
                     activePageIdxRef.current = pageIdx;
                   }}
-                  onClick={(e) => handlePageSelection(pageIdx, e)}
+                  onClick={(e) => {
+                    handlePageSelection(pageIdx, e);
+                    setSelectedDrawingId(null);
+                    setSelectedImageId(null);
+                    setIsEditingShape(false);
+                  }}
                   onInput={() => checkAndFlowPages(pageIdx)}
                   onKeyDown={(e) => {
-                    if (e.key === 'Enter' || e.key === ' ') {
-                      e.stopPropagation();
+                    if (e.key === 'Backspace') {
+                      const sel = window.getSelection();
+                      if (
+                        sel &&
+                        sel.isCollapsed &&
+                        sel.anchorOffset === 0 &&
+                        pageIdx > 0
+                      ) {
+                        const pageEl = pageRefs.current[pageIdx];
+                        const prevPageEl = pageRefs.current[pageIdx - 1];
+                        if (
+                          pageEl &&
+                          prevPageEl &&
+                          (pageEl.innerHTML.trim() === '' ||
+                            pageEl.innerHTML === '<p><br></p>' ||
+                            pageEl.textContent?.trim() === '')
+                        ) {
+                          e.preventDefault();
+                          setPages((prev) =>
+                            prev.filter((_, i) => i !== pageIdx)
+                          );
+                          prevPageEl.focus();
+                          const range = window.document.createRange();
+                          range.selectNodeContents(prevPageEl);
+                          range.collapse(false);
+                          sel.removeAllRanges();
+                          sel.addRange(range);
+                          setHasUnsavedChanges(true);
+                          triggerAutoSave();
+                          return;
+                        }
+                      }
                     }
                   }}
                   onMouseDown={(e) =>
+                    handlePageMouseDownForTableResize(pageIdx, e)
+                  }
+                  onTouchStart={(e) =>
                     handlePageMouseDownForTableResize(pageIdx, e)
                   }
                   onMouseMove={(e) =>
                     handlePageMouseMoveForTableResize(pageIdx, e)
                   }
                   onMouseUp={(e) => {
-                    handlePageMouseUpForTableResize();
                     handlePageSelection(pageIdx, e);
                   }}
                   onKeyUp={(e) => handlePageSelection(pageIdx, e)}
@@ -4271,6 +4843,234 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
           }}
           onClose={() => setShowLayoutModal(false)}
         />
+      )}
+
+      {/* =====================================================================
+          REQUIREMENT 1: UNSAVED CHANGES PROTECTION MODAL
+      ===================================================================== */}
+      {showUnsavedModal && (
+        <div className="nc-modal-backdrop no-print" style={{ zIndex: 9999 }}>
+          <div
+            className="nc-modal-dialog"
+            style={{ maxWidth: '480px', padding: 0 }}
+          >
+            <div
+              style={{
+                padding: '16px 20px',
+                borderBottom: '1px solid var(--border-ivory)',
+                backgroundColor: 'var(--bg-ivory)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+              }}
+            >
+              <div
+                style={{ display: 'flex', alignItems: 'center', gap: '8px' }}
+              >
+                <AlertCircle size={18} color="var(--accent-terracotta)" />
+                <h3
+                  style={{
+                    margin: 0,
+                    fontSize: '16px',
+                    fontWeight: 700,
+                    color: 'var(--ink-navy)',
+                  }}
+                >
+                  Unsaved Changes
+                </h3>
+              </div>
+              <button
+                onClick={() => setShowUnsavedModal(false)}
+                className="btn-ed-subtle"
+                style={{ padding: '4px' }}
+              >
+                <X size={14} />
+              </button>
+            </div>
+
+            <div style={{ padding: '20px' }}>
+              <p
+                style={{
+                  margin: '0 0 16px',
+                  fontSize: '13px',
+                  color: 'var(--ink-muted)',
+                  lineHeight: 1.5,
+                }}
+              >
+                You have unsaved changes in{' '}
+                <strong>"{title || 'Untitled Document'}"</strong>. What would you
+                like to do before leaving the workspace?
+              </p>
+
+              <div
+                style={{
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: '8px',
+                }}
+              >
+                <button
+                  type="button"
+                  onClick={handleConfirmSaveAndLeave}
+                  className="btn-ed-primary"
+                  style={{
+                    width: '100%',
+                    justifyContent: 'center',
+                    padding: '10px',
+                    fontSize: '12.5px',
+                  }}
+                >
+                  <Save size={14} />
+                  <span>Save and Leave</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={handleConfirmSaveLocallyAndLeave}
+                  className="btn-ed-outline"
+                  style={{
+                    width: '100%',
+                    justifyContent: 'center',
+                    padding: '10px',
+                    fontSize: '12.5px',
+                  }}
+                >
+                  <HardDrive size={14} color="var(--accent-blue)" />
+                  <span>Save Locally to Computer and Leave</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={handleConfirmDiscardAndLeave}
+                  className="btn-ed-subtle"
+                  style={{
+                    width: '100%',
+                    justifyContent: 'center',
+                    padding: '9px',
+                    fontSize: '12px',
+                    color: 'var(--accent-terracotta)',
+                  }}
+                >
+                  <span>Discard Changes</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setShowUnsavedModal(false)}
+                  className="btn-ed-subtle"
+                  style={{
+                    width: '100%',
+                    justifyContent: 'center',
+                    padding: '8px',
+                    fontSize: '12px',
+                  }}
+                >
+                  <span>Cancel (Stay in Workspace)</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* =====================================================================
+          REQUIREMENT 8: DEVICE CAMERA CAPTURE MODAL
+      ===================================================================== */}
+      {showCameraModal && (
+        <div className="nc-modal-backdrop no-print" style={{ zIndex: 9999 }}>
+          <div
+            className="nc-modal-dialog"
+            style={{ maxWidth: '520px', padding: 0 }}
+          >
+            <div
+              style={{
+                padding: '14px 18px',
+                borderBottom: '1px solid var(--border-ivory)',
+                backgroundColor: 'var(--bg-ivory)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+              }}
+            >
+              <div
+                style={{ display: 'flex', alignItems: 'center', gap: '8px' }}
+              >
+                <Camera size={16} color="var(--accent-blue)" />
+                <span
+                  style={{
+                    fontWeight: 700,
+                    fontSize: '14px',
+                    color: 'var(--ink-navy)',
+                  }}
+                >
+                  Take Photo with Device Camera
+                </span>
+              </div>
+              <button
+                onClick={stopLiveCamera}
+                className="btn-ed-subtle"
+                style={{ padding: '4px' }}
+              >
+                <X size={14} />
+              </button>
+            </div>
+
+            <div
+              style={{
+                padding: '18px',
+                display: 'flex',
+                flexDirection: 'column',
+                alignItems: 'center',
+                gap: '14px',
+              }}
+            >
+              <div
+                style={{
+                  width: '100%',
+                  height: '300px',
+                  backgroundColor: '#000000',
+                  borderRadius: '4px',
+                  overflow: 'hidden',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                }}
+              >
+                <video
+                  ref={videoPreviewRef}
+                  autoPlay
+                  playsInline
+                  muted
+                  style={{
+                    width: '100%',
+                    height: '100%',
+                    objectFit: 'contain',
+                  }}
+                />
+              </div>
+
+              <div style={{ display: 'flex', gap: '10px' }}>
+                <button
+                  type="button"
+                  onClick={capturePhotoFromCamera}
+                  className="btn-ed-primary"
+                  style={{ padding: '9px 20px', gap: '8px' }}
+                >
+                  <Camera size={15} />
+                  <span>Capture Photo</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={stopLiveCamera}
+                  className="btn-ed-outline"
+                  style={{ padding: '9px 16px' }}
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

@@ -400,7 +400,7 @@ export const INITIAL_DOCUMENTS: DocumentItem[] = [
       fontFamily: 'Times New Roman',
     },
     content: `
-      <div style="border-bottom: 2px solid #0A194E; padding-bottom: 12px; margin-bottom: 20px;">
+      <div style="margin-bottom: 20px;">
         <p style="margin: 0; font-weight: 700; font-size: 13pt;">UNIVERSITY OF LAGOS — DEPARTMENT OF ECONOMICS</p>
         <p style="margin: 4px 0 0 0; font-size: 11pt;"><strong>Course:</strong> ECN 312 (Macroeconomic Theory II) &nbsp;|&nbsp; <strong>Student:</strong> Adebayo Tobi Samuel (210903044) &nbsp;|&nbsp; <strong>Lecturer:</strong> Prof. M. A. Adebiyi</p>
       </div>
@@ -507,7 +507,7 @@ export const INITIAL_DOCUMENTS: DocumentItem[] = [
       fontFamily: 'Plus Jakarta Sans',
     },
     content: `
-      <div style="border-bottom: 2px solid #0A194E; padding-bottom: 14px; margin-bottom: 18px;">
+      <div style="margin-bottom: 18px;">
         <h1 style="margin: 0; font-size: 20pt; letter-spacing: -0.02em;">OSAHON EGHOSA VICTOR</h1>
         <p style="margin: 6px 0 0 0; font-size: 10.5pt; color: #334155;">Benin City / Lagos, Nigeria &nbsp;•&nbsp; +234 813 402 9188 &nbsp;•&nbsp; osahon.eghosa@email.com &nbsp;•&nbsp; linkedin.com/in/osahoneghosa</p>
       </div>
@@ -730,7 +730,7 @@ export function generateDocumentFromNaturalPrompt(
 
   if (category === 'assignments') {
     const content = `
-      <div style="border-bottom: 2px solid #0A194E; padding-bottom: 12px; margin-bottom: 20px;">
+      <div style="margin-bottom: 20px;">
         <p style="margin: 0; font-size: 13pt; font-weight: 700; text-transform: uppercase;">${inst} — ${dept}</p>
         <p style="margin: 4px 0 0 0; font-size: 10.5pt;"><strong>Course Code:</strong> ${courseCode} &nbsp;|&nbsp; <strong>Student:</strong> ${student} &nbsp;|&nbsp; <strong>Lecturer:</strong> ${lecturer}</p>
       </div>
@@ -796,7 +796,7 @@ export function generateDocumentFromNaturalPrompt(
 
   if (category === 'seminars') {
     const content = `
-      <div style="text-align: center; border-bottom: 2px solid #0A194E; padding-bottom: 16px; margin-bottom: 22px;">
+      <div style="text-align: center; margin-bottom: 22px;">
         <p style="font-size: 10.5pt; font-weight: 600; letter-spacing: 0.08em;">ACADEMIC SEMINAR PAPER</p>
         <h1 style="margin: 8px 0; font-size: 16.5pt;">${title.toUpperCase()}</h1>
         <p style="margin: 6px 0 0 0;"><strong>Presenter:</strong> ${student} &nbsp;|&nbsp; <strong>Department:</strong> ${dept}, ${inst}</p>
@@ -844,7 +844,7 @@ export function generateDocumentFromNaturalPrompt(
   if (category === 'cv') {
     const candidateName = optional.studentName || title;
     const content = `
-      <div style="border-bottom: 2px solid #0A194E; padding-bottom: 14px; margin-bottom: 18px;">
+      <div style="margin-bottom: 18px;">
         <h1 style="margin: 0; font-size: 20pt; letter-spacing: -0.02em;">${candidateName.toUpperCase()}</h1>
         <p style="margin: 6px 0 0 0; font-size: 10.5pt; color: #334155;">Lagos / Benin City, Nigeria &nbsp;•&nbsp; +234 800 000 0000 &nbsp;•&nbsp; candidate@email.com &nbsp;•&nbsp; linkedin.com/in/candidate</p>
       </div>

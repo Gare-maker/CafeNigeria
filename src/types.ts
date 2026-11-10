@@ -48,6 +48,39 @@ export interface PageLayoutSettings {
   sectionOrientations?: Record<number, 'portrait' | 'landscape'>;
 }
 
+export const DEFAULT_PAGE_LAYOUT: PageLayoutSettings = {
+  pageSize: 'A4',
+  customWidthMm: 210,
+  customHeightMm: 297,
+  orientation: 'portrait',
+  marginPreset: 'normal',
+  marginTopMm: 25,
+  marginBottomMm: 25,
+  marginLeftMm: 25,
+  marginRightMm: 25,
+  columns: 1,
+  columnGapPx: 28,
+  pageBackground: '#FFFFFF',
+  borderStyle: 'none',
+  borderWidthPx: 1,
+  borderColor: '#0A194E',
+  headerSpacingPx: 18,
+  footerSpacingPx: 24,
+  sectionOrientations: {},
+};
+
+export const PAGE_DIMENSIONS_PX: Record<
+  PageLayoutSettings['pageSize'],
+  { w: number; h: number }
+> = {
+  A4: { w: 794, h: 1122 },
+  A3: { w: 1122, h: 1587 },
+  A5: { w: 559, h: 794 },
+  Letter: { w: 816, h: 1056 },
+  Legal: { w: 816, h: 1344 },
+  Custom: { w: 794, h: 1122 },
+};
+
 export type ShapeType =
   | 'rect'
   | 'square'
@@ -124,7 +157,7 @@ export interface DocumentItem {
     footerText?: string;
     showPageNumbers?: boolean;
     orientation?: 'portrait' | 'landscape';
-    marginSize?: 'normal' | 'narrow' | 'wide';
+    marginSize?: 'normal' | 'narrow' | 'wide' | 'custom';
     fontFamily?: string;
     layout?: PageLayoutSettings;
     drawings?: DrawingElement[];

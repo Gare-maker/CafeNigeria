@@ -13,8 +13,17 @@ import {
   FolderOpen,
   FilePlus,
   HardDriveUpload,
+  Sliders,
+  Sparkles,
+  Edit3,
 } from 'lucide-react';
-import { DocumentCategory, DocumentItem } from '../types';
+import {
+  DocumentCategory,
+  DocumentItem,
+  PageLayoutSettings,
+  DEFAULT_PAGE_LAYOUT,
+} from '../types';
+import { PageLayoutModal } from './PageLayoutModal';
 import {
   CATEGORY_PAGE_COPY,
   formatDisplayDate,
@@ -45,6 +54,15 @@ export const CreateDocumentModal: React.FC<CreateDocumentModalProps> = ({
 
   // Requirement 15 & 17: Option A (Create New) vs Option B (Continue with Existing Document)
   const [workflowMode, setWorkflowMode] = useState<'new' | 'existing'>('new');
+  // Requirement 7: Make AI Optional when creating a document
+  const [creationMethod, setCreationMethod] = useState<'ai' | 'manual'>('ai');
+  const [manualTitle, setManualTitle] = useState('');
+
+  // Requirement 6: Add Layout Settings to Document Creation Process
+  const [layoutOption, setLayoutOption] = useState<'default' | 'custom'>('default');
+  const [customLayout, setCustomLayout] = useState<PageLayoutSettings>(DEFAULT_PAGE_LAYOUT);
+  const [showLayoutModal, setShowLayoutModal] = useState(false);
+
   const [selectedExistingDocId, setSelectedExistingDocId] = useState<string>(
     () => {
       const sameCat = existingDocuments.find((d) => d.category === category);
@@ -386,6 +404,9 @@ export const CreateDocumentModal: React.FC<CreateDocumentModalProps> = ({
         }
       );
 
+      const chosenLayout =
+        layoutOption === 'custom' ? customLayout : DEFAULT_PAGE_LAYOUT;
+
       const newDoc: DocumentItem = {
         id: `doc-${Date.now()}`,
         title: generated.title,
@@ -396,13 +417,57 @@ export const CreateDocumentModal: React.FC<CreateDocumentModalProps> = ({
         status: 'Draft',
         syncStatus: isOnline ? 'saved' : 'offline-pending',
         format: 'DOCX',
-        metadata: generated.metadata,
+        metadata: {
+          ...generated.metadata,
+          layout: chosenLayout,
+          orientation: chosenLayout.orientation,
+          marginSize: chosenLayout.marginPreset,
+        },
         aiHistory: [],
       };
 
       setIsGenerating(false);
       onDocumentCreated(newDoc, false);
     }, 380);
+  };
+
+  // Requirement 7: Option 2 - Create Without AI (Blank Document or Uploaded File)
+  const handleCreateBlankDocument = () => {
+    const todayFormatted = getCurrentFormattedDate();
+    const effectiveTitle =
+      manualTitle.trim() ||
+      `${copy.modalTitle.replace('Create ', '')} (Blank Document)`;
+    const blankContent = `<h1>${effectiveTitle}</h1><p><br/></p>`;
+    const chosenLayout =
+      layoutOption === 'custom' ? customLayout : DEFAULT_PAGE_LAYOUT;
+
+    const blankDoc: DocumentItem = {
+      id: `doc-${Date.now()}`,
+      title: effectiveTitle,
+      category,
+      content: blankContent,
+      createdAt: todayFormatted,
+      updatedAt: todayFormatted,
+      status: 'Draft',
+      syncStatus: isOnline ? 'saved' : 'offline-pending',
+      format: 'DOCX',
+      metadata: {
+        institution: institution.trim() || undefined,
+        department: department.trim() || undefined,
+        courseCode: courseCode.trim() || undefined,
+        studentName: studentName.trim() || undefined,
+        lecturerOrSupervisor: lecturer.trim() || undefined,
+        referencingStyle,
+        wordCountTarget: wordCount.trim() || undefined,
+        showPageNumbers: true,
+        orientation: chosenLayout.orientation,
+        marginSize: chosenLayout.marginPreset,
+        fontFamily: 'Times New Roman',
+        layout: chosenLayout,
+      },
+      aiHistory: [],
+    };
+    onDocumentCreated(blankDoc, false);
   };
 
   return (
@@ -576,6 +641,255 @@ export const CreateDocumentModal: React.FC<CreateDocumentModalProps> = ({
             </button>
           </div>
 
+          {/* Requirement 6: Document Layout Settings Selector (Before Document Creation) */}
+          <div
+            style={{
+              padding: '10px 14px',
+              backgroundColor: 'var(--bg-stone)',
+              border: '1px solid var(--border-ivory)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              flexWrap: 'wrap',
+              gap: '10px',
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <Sliders size={14} color="var(--accent-blue)" />
+              <div>
+                <span
+                  style={{
+                    fontSize: '12px',
+                    fontWeight: 700,
+                    color: 'var(--ink-navy)',
+                  }}
+                >
+                  Document Layout:{' '}
+                </span>
+                <span style={{ fontSize: '11.5px', color: 'var(--ink-muted)' }}>
+                  {layoutOption === 'default'
+                    ? 'Standard A4 (Portrait, 25mm margins, 1 Column)'
+                    : `${customLayout.pageSize} (${customLayout.orientation}, ${customLayout.marginPreset} margins, ${customLayout.columns} col)`}
+                </span>
+              </div>
+            </div>
+
+            <div style={{ display: 'flex', gap: '6px' }}>
+              <button
+                type="button"
+                onClick={() => setLayoutOption('default')}
+                className={
+                  layoutOption === 'default' ? 'btn-ed-primary' : 'btn-ed-subtle'
+                }
+                style={{ padding: '4px 9px', fontSize: '10px' }}
+              >
+                Use Default Layout
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setLayoutOption('custom');
+                  setShowLayoutModal(true);
+                }}
+                className={
+                  layoutOption === 'custom' ? 'btn-ed-primary' : 'btn-ed-subtle'
+                }
+                style={{ padding: '4px 9px', fontSize: '10px' }}
+              >
+                Set Custom Layout...
+              </button>
+            </div>
+          </div>
+
+          {/* Requirement 7: Make AI Optional when creating a document */}
+          {workflowMode === 'new' && (
+            <div
+              style={{
+                display: 'grid',
+                gridTemplateColumns: '1fr 1fr',
+                gap: '8px',
+              }}
+            >
+              <button
+                type="button"
+                onClick={() => setCreationMethod('ai')}
+                style={{
+                  padding: '10px 14px',
+                  border:
+                    creationMethod === 'ai'
+                      ? '2px solid var(--accent-blue)'
+                      : '1px solid var(--border-stone)',
+                  backgroundColor:
+                    creationMethod === 'ai'
+                      ? 'rgba(20, 71, 230, 0.05)'
+                      : 'var(--bg-ivory)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '8px',
+                  cursor: 'pointer',
+                  textAlign: 'left',
+                }}
+              >
+                <Sparkles
+                  size={16}
+                  color={
+                    creationMethod === 'ai'
+                      ? 'var(--accent-blue)'
+                      : 'var(--ink-muted)'
+                  }
+                />
+                <div>
+                  <div
+                    style={{
+                      fontSize: '12.5px',
+                      fontWeight: 700,
+                      color:
+                        creationMethod === 'ai'
+                          ? 'var(--accent-blue)'
+                          : 'var(--ink-navy)',
+                    }}
+                  >
+                    Option 1: Create with AI
+                  </div>
+                  <div style={{ fontSize: '11px', color: 'var(--ink-muted)' }}>
+                    Generate structured draft from instructions or prompt
+                  </div>
+                </div>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setCreationMethod('manual')}
+                style={{
+                  padding: '10px 14px',
+                  border:
+                    creationMethod === 'manual'
+                      ? '2px solid var(--accent-blue)'
+                      : '1px solid var(--border-stone)',
+                  backgroundColor:
+                    creationMethod === 'manual'
+                      ? 'rgba(20, 71, 230, 0.05)'
+                      : 'var(--bg-ivory)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '8px',
+                  cursor: 'pointer',
+                  textAlign: 'left',
+                }}
+              >
+                <Edit3
+                  size={16}
+                  color={
+                    creationMethod === 'manual'
+                      ? 'var(--accent-blue)'
+                      : 'var(--ink-muted)'
+                  }
+                />
+                <div>
+                  <div
+                    style={{
+                      fontSize: '12.5px',
+                      fontWeight: 700,
+                      color:
+                        creationMethod === 'manual'
+                          ? 'var(--accent-blue)'
+                          : 'var(--ink-navy)',
+                    }}
+                  >
+                    Option 2: Create Without AI
+                  </div>
+                  <div style={{ fontSize: '11px', color: 'var(--ink-muted)' }}>
+                    Start with a blank document or upload an existing file
+                  </div>
+                </div>
+              </button>
+            </div>
+          )}
+
+          {/* Requirement 7: Manual Document Creation Interface (Without AI) */}
+          {workflowMode === 'new' && creationMethod === 'manual' && (
+            <div
+              style={{
+                padding: '16px',
+                backgroundColor: 'var(--bg-stone)',
+                border: '1px solid var(--border-ivory)',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: '14px',
+              }}
+            >
+              <div>
+                <label className="ed-field-label">Document Title</label>
+                <input
+                  type="text"
+                  value={manualTitle}
+                  onChange={(e) => setManualTitle(e.target.value)}
+                  placeholder={`e.g. My ${copy.modalTitle.replace('Create ', '')}`}
+                  className="ed-input"
+                  style={{ fontSize: '13px' }}
+                />
+              </div>
+
+              <div
+                style={{
+                  display: 'flex',
+                  gap: '10px',
+                  flexWrap: 'wrap',
+                  alignItems: 'center',
+                }}
+              >
+                <button
+                  type="button"
+                  onClick={handleCreateBlankDocument}
+                  className="btn-ed-primary"
+                  style={{ padding: '9px 18px', fontSize: '12.5px', gap: '7px' }}
+                >
+                  <FilePlus size={14} />
+                  <span>Open Blank Document in Workspace</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={handleLoadComputerDocForWorkflow}
+                  className="btn-ed-outline"
+                  style={{ padding: '9px 16px', fontSize: '12.5px', gap: '7px' }}
+                >
+                  <HardDriveUpload size={14} color="var(--accent-blue)" />
+                  <span>Upload Existing Document File</span>
+                </button>
+              </div>
+
+              {importedComputerDoc && (
+                <div
+                  style={{
+                    padding: '10px 14px',
+                    backgroundColor: 'var(--bg-ivory)',
+                    border: '1px solid var(--border-stone)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                  }}
+                >
+                  <span style={{ fontSize: '12px' }}>
+                    Uploaded File: <strong>{importedComputerDoc.title}</strong>
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => onDocumentCreated(importedComputerDoc, false)}
+                    className="btn-ed-primary"
+                    style={{ padding: '5px 12px', fontSize: '11px' }}
+                  >
+                    Open Uploaded Document
+                  </button>
+                </div>
+              )}
+
+              <p style={{ fontSize: '11.5px', color: 'var(--ink-muted)', margin: 0 }}>
+                💡 You can freely type, format, and edit manually in the workspace, and call upon the AI writing assistant later whenever you need assistance.
+              </p>
+            </div>
+          )}
+
           {/* Option B: Select Existing Document from Library or Computer (Requirement 15 & 17) */}
           {workflowMode === 'existing' && (
             <div
@@ -682,8 +996,10 @@ export const CreateDocumentModal: React.FC<CreateDocumentModalProps> = ({
             </div>
           )}
 
-          {/* Requirement 16: Unified AI Input Box with Voice Icon, Upload Icon & Submit Button INSIDE Bottom-Right */}
-          <div>
+          {/* AI Creation Interface (Only shown when workflowMode is existing OR creationMethod is AI) */}
+          {(workflowMode === 'existing' || creationMethod === 'ai') && (
+            <>
+              <div>
             <div
               style={{
                 border: isRecording
@@ -1087,6 +1403,22 @@ export const CreateDocumentModal: React.FC<CreateDocumentModalProps> = ({
                 </div>
               )}
             </div>
+          )}
+            </>
+          )}
+
+          {/* Requirement 6: Pre-Creation Page Layout Configuration Modal */}
+          {showLayoutModal && (
+            <PageLayoutModal
+              layout={customLayout}
+              layoutScope="document"
+              activePageIndex={0}
+              onChangeLayout={setCustomLayout}
+              onChangeScope={() => {}}
+              onResetDefault={() => setCustomLayout(DEFAULT_PAGE_LAYOUT)}
+              onApplyAndClose={() => setShowLayoutModal(false)}
+              onClose={() => setShowLayoutModal(false)}
+            />
           )}
         </div>
       </div>

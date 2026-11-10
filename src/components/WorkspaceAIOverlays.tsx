@@ -861,15 +861,28 @@ export const ElementLayerToolbar: React.FC<ElementLayerToolbarProps> = ({
               onUpdateDrawing({ strokeWidth: parseInt(e.target.value, 10) })
             }
             className="ed-select"
-            style={{ width: '66px', padding: '3px 5px', fontSize: '11px' }}
+            style={{ width: '82px', padding: '3px 5px', fontSize: '11px' }}
             title="Stroke Thickness"
           >
+            <option value={0}>0 px (None)</option>
             <option value={1}>1 px</option>
             <option value={2}>2 px</option>
             <option value={3}>3 px</option>
             <option value={5}>5 px</option>
             <option value={8}>8 px</option>
           </select>
+
+          <button
+            type="button"
+            onClick={() =>
+              onUpdateDrawing({ strokeWidth: 0, strokeColor: 'transparent' })
+            }
+            className="btn-ed-subtle"
+            style={{ padding: '4px 7px', fontSize: '9px' }}
+            title="Remove stroke border entirely"
+          >
+            No Stroke
+          </button>
 
           {/* Shape Dimensions W × H */}
           <div style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
