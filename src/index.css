@@ -314,6 +314,19 @@ button, input, select, textarea {
   font-size: 11pt;
   min-width: 60px;
   position: relative;
+  user-select: text !important;
+  -webkit-user-select: text !important;
+}
+
+.doc-editable-body blockquote,
+.doc-editable-body ul,
+.doc-editable-body ol,
+.doc-editable-body li,
+.doc-editable-body p,
+.doc-editable-body span,
+.doc-editable-body div {
+  user-select: text;
+  -webkit-user-select: text;
 }
 
 .doc-editable-body th {
@@ -556,17 +569,33 @@ mark.ai-persistent-selection {
 }
 
 @media print {
-  .no-print {
+  .no-print,
+  .nc-header,
+  .nc-ai-panel,
+  .nc-groups-sidebar,
+  .ed-toolbar,
+  .nc-modal-backdrop,
+  .nc-element-layer-toolbar,
+  .canvas-image-toolbar,
+  mark.ai-persistent-selection {
     display: none !important;
   }
-  body, .doc-workspace-canvas-wrap {
+  html, body {
+    margin: 0 !important;
+    padding: 0 !important;
+    background: #FFFFFF !important;
+  }
+  .doc-workspace-canvas-wrap {
     background: #FFFFFF !important;
     padding: 0 !important;
+    margin: 0 !important;
+    overflow: visible !important;
   }
   .doc-a4-page {
     border: none !important;
     box-shadow: none !important;
-    width: 100% !important;
-    page-break-after: always;
+    margin: 0 auto !important;
+    page-break-after: always !important;
+    break-after: page !important;
   }
 }

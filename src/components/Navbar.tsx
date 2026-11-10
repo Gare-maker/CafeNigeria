@@ -36,6 +36,7 @@ const CREATE_DROPDOWN_ITEMS: { label: string; category: DocumentCategory }[] = [
   { label: 'Create Seminar', category: 'seminars' },
   { label: 'Create CV', category: 'cv' },
   { label: 'Create Notes from Image', category: 'image-to-notes' },
+  { label: 'Free-Form Writing', category: 'free-writing' },
 ];
 
 export const Navbar: React.FC<NavbarProps> = ({

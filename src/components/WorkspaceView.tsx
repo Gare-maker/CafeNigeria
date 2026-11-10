@@ -43,6 +43,7 @@ import {
   FileText,
   HardDriveDownload,
   Camera,
+  Printer,
   Save,
   HardDrive,
   AlertCircle,
@@ -183,9 +184,17 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
 
   // Requirement 2: Toolbar Heading sync (H1, H2, H3, P)
   const [currentHeading, setCurrentHeading] = useState<'P' | 'H1' | 'H2' | 'H3'>('P');
+  // Text formatting: font size & font family state
+  const [selectedFontSize, setSelectedFontSize] = useState('12px');
+  const [selectedFontFamily, setSelectedFontFamily] = useState(
+    doc.metadata.fontFamily || 'Times New Roman'
+  );
 
-  // Requirement 8: Camera option for image upload
-  const [showImageDropdown, setShowImageDropdown] = useState(false);
+  // Requirement 8: Camera option for image upload & floating dropdown positioning
+  const [imageMenuPos, setImageMenuPos] = useState<{
+    top: number;
+    left: number;
+  } | null>(null);
   const [showCameraModal, setShowCameraModal] = useState(false);
 
   // Requirement 9: Shape Editing mode
@@ -575,7 +584,13 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
         setShowExportMenu(false);
       }
       if (!target.closest('.nc-image-dropdown-btn') && !target.closest('.nc-image-dropdown-menu')) {
-        setShowImageDropdown(false);
+        setImageMenuPos(null);
+      }
+      if (!target.closest('.nc-table-dropdown-btn') && !target.closest('.nc-table-dropdown-menu')) {
+        setTableMenuPos(null);
+      }
+      if (!target.closest('.nc-shape-dropdown-btn') && !target.closest('.nc-shape-dropdown-menu')) {
+        setShapeMenuPos(null);
       }
     };
     window.document.addEventListener('mousedown', handleClickOutside);
@@ -839,7 +854,15 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
         mark.className = 'ai-persistent-selection';
         savedRangeRef.current.surroundContents(mark);
       } catch {
-        // partial tag selection handles via savedRangeRef
+        try {
+          const extracted = savedRangeRef.current.extractContents();
+          const mark = window.document.createElement('mark');
+          mark.className = 'ai-persistent-selection';
+          mark.appendChild(extracted);
+          savedRangeRef.current.insertNode(mark);
+        } catch {
+          // partial tag selection handles via savedRangeRef
+        }
       }
     }
     setShowTextAiPopup(true);
@@ -847,15 +870,16 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
 
   const handleCloseTextAiPopup = () => {
     setShowTextAiPopup(false);
-    const pageEl = pageRefs.current[highlightPageIdx];
-    if (pageEl) {
-      const marks = pageEl.querySelectorAll('mark.ai-persistent-selection');
-      marks.forEach((m) => {
-        const parent = m.parentNode;
-        while (m.firstChild) parent?.insertBefore(m.firstChild, m);
-        m.remove();
-      });
-    }
+    pageRefs.current.forEach((pageEl) => {
+      if (pageEl) {
+        const marks = pageEl.querySelectorAll('mark.ai-persistent-selection');
+        marks.forEach((m) => {
+          const parent = m.parentNode;
+          while (m.firstChild) parent?.insertBefore(m.firstChild, m);
+          m.remove();
+        });
+      }
+    });
     setHighlightedText('');
     setHighlightBadgePos(null);
   };
@@ -924,6 +948,135 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
   // =========================================================================
   // FORMATTING & TABLE EDITING (Requirement 2: Heading 1, 2, 3 Sync & Word-style Table Resizing)
   // =========================================================================
+  const applyInlineStyleToSelection = (property: string, value: string) => {
+    const activeEl = pageRefs.current[activePageIdxRef.current];
+    if (activeEl) {
+      activeEl.focus();
+    }
+
+    const sel = window.getSelection();
+    let range: Range | null = null;
+    if (sel && sel.rangeCount > 0 && !sel.isCollapsed) {
+      range = sel.getRangeAt(0);
+    } else if (savedRangeRef.current && !savedRangeRef.current.collapsed) {
+      range = savedRangeRef.current;
+      if (sel) {
+        sel.removeAllRanges();
+        sel.addRange(range);
+      }
+    }
+
+    if (!range || range.collapsed) {
+      return;
+    }
+
+    // Ensure range is inside editor
+    const isInside = pageRefs.current.some(
+      (el) => el && el.contains(range!.commonAncestorContainer)
+    );
+    if (!isInside) return;
+
+    try {
+      const span = window.document.createElement('span');
+      span.style.setProperty(property, value);
+      const extracted = range.extractContents();
+      span.appendChild(extracted);
+      range.insertNode(span);
+
+      // Re-select newly styled text
+      const newRange = window.document.createRange();
+      newRange.selectNodeContents(span);
+      if (sel) {
+        sel.removeAllRanges();
+        sel.addRange(newRange);
+        savedRangeRef.current = newRange.cloneRange();
+      }
+    } catch (err) {
+      console.warn('Failed to apply inline style to selection', err);
+    }
+
+    setHasUnsavedChanges(true);
+    const updatedPages = pages.map((p, i) =>
+      pageRefs.current[i] ? pageRefs.current[i]!.innerHTML : p
+    );
+    pushHistory(updatedPages);
+    triggerAutoSave();
+  };
+
+  const handleApplyFontSize = (sizeStr: string) => {
+    const trimmed = sizeStr.trim();
+    if (!trimmed) return;
+    const num = parseInt(trimmed, 10);
+    if (isNaN(num) || num < 6 || num > 120) return;
+    const formatted =
+      trimmed.endsWith('px') || trimmed.endsWith('pt')
+        ? trimmed
+        : `${num}px`;
+    setSelectedFontSize(formatted);
+    applyInlineStyleToSelection('font-size', formatted);
+  };
+
+  const handleApplyFontFamily = (family: string) => {
+    setSelectedFontFamily(family);
+    applyInlineStyleToSelection('font-family', `"${family}", Georgia, serif`);
+  };
+
+  const handlePrintWorkspace = () => {
+    const orientation = layout.orientation || 'portrait';
+    const pageSizeName =
+      layout.pageSize === 'Custom'
+        ? `${layout.customWidthMm || 210}mm ${layout.customHeightMm || 297}mm`
+        : layout.pageSize;
+
+    let styleEl = window.document.getElementById(
+      'nc-dynamic-print-style'
+    ) as HTMLStyleElement | null;
+    if (!styleEl) {
+      styleEl = window.document.createElement('style');
+      styleEl.id = 'nc-dynamic-print-style';
+      window.document.head.appendChild(styleEl);
+    }
+
+    styleEl.innerHTML = `
+      @media print {
+        @page {
+          size: ${pageSizeName} ${orientation};
+          margin: 0;
+        }
+        html, body {
+          margin: 0 !important;
+          padding: 0 !important;
+          background: #FFFFFF !important;
+        }
+        .no-print,
+        .nc-header,
+        .nc-ai-panel,
+        .nc-groups-sidebar,
+        .ed-toolbar,
+        .nc-modal-backdrop,
+        .nc-element-layer-toolbar,
+        mark.ai-persistent-selection {
+          display: none !important;
+        }
+        .doc-workspace-canvas-wrap {
+          background: #FFFFFF !important;
+          padding: 0 !important;
+          margin: 0 !important;
+          overflow: visible !important;
+        }
+        .doc-a4-page {
+          margin: 0 auto !important;
+          box-shadow: none !important;
+          border: none !important;
+          page-break-after: always !important;
+          break-after: page !important;
+        }
+      }
+    `;
+
+    window.print();
+  };
+
   const execFormat = (command: string, value?: string) => {
     const activeEl = pageRefs.current[activePageIdxRef.current];
     if (activeEl) {
@@ -1932,7 +2085,7 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
 
   // Requirement 8: Device Camera Capture Handlers
   const startLiveCamera = async () => {
-    setShowImageDropdown(false);
+    setImageMenuPos(null);
     setShowCameraModal(true);
     try {
       if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
@@ -2699,6 +2852,17 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
             )}
           </div>
 
+          {/* Requirement: Dedicated Workspace Print with Landscape Support */}
+          <button
+            onClick={handlePrintWorkspace}
+            className="btn-ed-outline"
+            style={{ height: '32px', padding: '0 10px', fontSize: '10px' }}
+            title="Print document (with true landscape/portrait orientation)"
+          >
+            <Printer size={13} color="var(--accent-blue)" />
+            <span className="hide-on-mobile">Print</span>
+          </button>
+
           <button
             onClick={() => setShowAiPanel((p) => !p)}
             className="btn-ed-subtle"
@@ -2732,9 +2896,9 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
         }}
       >
         <select
-          value={doc.metadata.fontFamily || 'Times New Roman'}
+          value={selectedFontFamily}
           onChange={(e) => {
-            execFormat('fontName', e.target.value);
+            handleApplyFontFamily(e.target.value);
             triggerAutoSave({
               overrideMeta: { fontFamily: e.target.value },
             });
@@ -2762,18 +2926,44 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
           <option value="H3">Heading 3</option>
         </select>
 
-        <select
-          onChange={(e) => execFormat('fontSize', e.target.value)}
-          defaultValue="3"
-          className="ed-select"
-          style={{ width: '68px', padding: '4px 6px', fontSize: '12px' }}
-        >
-          <option value="2">10 pt</option>
-          <option value="3">12 pt</option>
-          <option value="4">14 pt</option>
-          <option value="5">18 pt</option>
-          <option value="6">24 pt</option>
-        </select>
+        <div style={{ display: 'inline-flex', alignItems: 'center' }}>
+          <input
+            type="text"
+            list="nc-font-size-datalist"
+            value={selectedFontSize}
+            onChange={(e) => setSelectedFontSize(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') {
+                e.preventDefault();
+                handleApplyFontSize(selectedFontSize);
+              }
+            }}
+            onBlur={() => handleApplyFontSize(selectedFontSize)}
+            className="ed-input"
+            style={{
+              width: '62px',
+              padding: '4px 5px',
+              fontSize: '12px',
+              textAlign: 'center',
+              height: '28px',
+            }}
+            title="Font size (e.g. 10px, 12px, 14px, 16px, 18px, 24px) - select or type"
+          />
+          <datalist id="nc-font-size-datalist">
+            <option value="10px" />
+            <option value="11px" />
+            <option value="12px" />
+            <option value="13px" />
+            <option value="14px" />
+            <option value="16px" />
+            <option value="18px" />
+            <option value="20px" />
+            <option value="24px" />
+            <option value="28px" />
+            <option value="32px" />
+            <option value="36px" />
+          </datalist>
+        </div>
 
         <button
           onMouseDown={(e) => e.preventDefault()}
@@ -2806,13 +2996,13 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
         <label
           className="btn-ed-subtle"
           style={{ padding: '4px 7px', cursor: 'pointer' }}
-          title="Text Colour"
+          title="Text Colour (applies to selected text)"
         >
           <span style={{ fontSize: '11px', fontWeight: 700 }}>A</span>
           <input
             type="color"
             defaultValue="#0A194E"
-            onChange={(e) => execFormat('foreColor', e.target.value)}
+            onChange={(e) => applyInlineStyleToSelection('color', e.target.value)}
             style={{ width: '13px', height: '13px', border: 'none', padding: 0 }}
           />
         </label>
@@ -2906,79 +3096,35 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
         </button>
 
         {/* Requirement 8: Image & Camera Upload Options */}
-        <div style={{ position: 'relative' }}>
-          <button
-            onMouseDown={(e) => e.preventDefault()}
-            onClick={() => setShowImageDropdown((p) => !p)}
-            className="btn-ed-subtle nc-image-dropdown-btn"
-            style={{
-              padding: '5px 9px',
-              backgroundColor: showImageDropdown
-                ? 'var(--bg-stone)'
-                : 'transparent',
-              gap: '4px',
-            }}
-            title="Insert Image from Device or Camera"
-          >
-            <ImageIcon size={13} color="var(--accent-blue)" />
-            <span>Image</span>
-            <ChevronDown size={11} />
-          </button>
-
-          {showImageDropdown && (
-            <div
-              className="no-print nc-image-dropdown-menu"
-              style={{
-                position: 'absolute',
-                top: '100%',
-                left: 0,
-                marginTop: '4px',
-                zIndex: 120,
-                backgroundColor: 'var(--bg-ivory)',
-                border: '1px solid var(--border-stone)',
-                boxShadow: '0 4px 14px rgba(10, 25, 78, 0.12)',
-                display: 'flex',
-                flexDirection: 'column',
-                minWidth: '190px',
-                padding: '4px',
-              }}
-            >
-              <button
-                type="button"
-                onClick={() => {
-                  setShowImageDropdown(false);
-                  imageInputRef.current?.click();
-                }}
-                className="btn-ed-subtle"
-                style={{
-                  justifyContent: 'flex-start',
-                  padding: '7px 10px',
-                  fontSize: '11.5px',
-                  gap: '8px',
-                  width: '100%',
-                }}
-              >
-                <HardDrive size={13} color="var(--accent-blue)" />
-                <span>Upload from Device</span>
-              </button>
-              <button
-                type="button"
-                onClick={startLiveCamera}
-                className="btn-ed-subtle"
-                style={{
-                  justifyContent: 'flex-start',
-                  padding: '7px 10px',
-                  fontSize: '11.5px',
-                  gap: '8px',
-                  width: '100%',
-                }}
-              >
-                <Camera size={13} color="var(--accent-blue)" />
-                <span>Take Photo with Camera</span>
-              </button>
-            </div>
-          )}
-        </div>
+        <button
+          onMouseDown={(e) => e.preventDefault()}
+          onClick={(e) => {
+            setTableMenuPos(null);
+            setShapeMenuPos(null);
+            if (imageMenuPos) {
+              setImageMenuPos(null);
+            } else {
+              const r = e.currentTarget.getBoundingClientRect();
+              setImageMenuPos({
+                top: r.bottom + 6,
+                left: Math.min(r.left, window.innerWidth - 220),
+              });
+            }
+          }}
+          className="btn-ed-subtle nc-image-dropdown-btn"
+          style={{
+            padding: '5px 9px',
+            backgroundColor: imageMenuPos
+              ? 'var(--bg-stone)'
+              : 'transparent',
+            gap: '4px',
+          }}
+          title="Insert Image from Device or Camera"
+        >
+          <ImageIcon size={13} color="var(--accent-blue)" />
+          <span>Image</span>
+          <ChevronDown size={11} />
+        </button>
 
         {/* Requirement 11 & 13: Shape Dropdown Overlay Button */}
         <button
@@ -3236,6 +3382,66 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
               Cancel Drawing Mode
             </button>
           )}
+        </div>
+      )}
+
+      {/* =====================================================================
+          FLOATING OVERLAY DROPDOWN FOR IMAGE INSERTION
+      ===================================================================== */}
+      {imageMenuPos && (
+        <div
+          className="no-print nc-image-dropdown-menu"
+          style={{
+            position: 'fixed',
+            top: `${imageMenuPos.top}px`,
+            left: `${imageMenuPos.left}px`,
+            width: '210px',
+            backgroundColor: 'var(--bg-ivory)',
+            border: '1px solid var(--border-stone)',
+            boxShadow: '0 12px 28px rgba(10, 25, 78, 0.2)',
+            zIndex: 260,
+            padding: '6px',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: '4px',
+          }}
+        >
+          <button
+            type="button"
+            onClick={() => {
+              setImageMenuPos(null);
+              imageInputRef.current?.click();
+            }}
+            className="btn-ed-subtle"
+            style={{
+              justifyContent: 'flex-start',
+              padding: '7px 10px',
+              fontSize: '11.5px',
+              gap: '8px',
+              width: '100%',
+            }}
+          >
+            <HardDrive size={13} color="var(--accent-blue)" />
+            <span>Upload from Device</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setImageMenuPos(null);
+              startLiveCamera();
+            }}
+            className="btn-ed-subtle"
+            style={{
+              justifyContent: 'flex-start',
+              padding: '7px 10px',
+              fontSize: '11.5px',
+              gap: '8px',
+              width: '100%',
+            }}
+          >
+            <Camera size={13} color="var(--accent-blue)" />
+            <span>Take Photo with Camera</span>
+          </button>
         </div>
       )}
 

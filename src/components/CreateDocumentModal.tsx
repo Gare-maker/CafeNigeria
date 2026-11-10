@@ -164,6 +164,8 @@ export const CreateDocumentModal: React.FC<CreateDocumentModalProps> = ({
       cv: 'Create a professional CV for a Computer Science graduate from the University of Lagos applying for a Data and Operations Analyst role.',
       'image-to-notes':
         'Organise the uploaded lecture notes into clear headings bullet points concept explanations and five self-test revision questions.',
+      'free-writing':
+        'Draft a comprehensive proposal on sustainable solar microgrids for community health centres in Nigeria including executive summary project scope budget breakdown and impact evaluation.',
     };
 
     const words = (
@@ -330,6 +332,27 @@ export const CreateDocumentModal: React.FC<CreateDocumentModalProps> = ({
       ? importedComputerDoc
       : existingDocuments.find((d) => d.id === selectedExistingDocId) ||
         existingDocuments[0];
+
+  const handleOpenExistingWithoutAI = () => {
+    if (!selectedExistingDoc) return;
+    if (preserveMode === 'overwrite' && !importedComputerDoc) {
+      onDocumentCreated(selectedExistingDoc, true);
+    } else {
+      const todayFormatted = getCurrentFormattedDate();
+      const workingCopy: DocumentItem = {
+        ...selectedExistingDoc,
+        id: importedComputerDoc ? selectedExistingDoc.id : `doc-${Date.now()}`,
+        title: importedComputerDoc
+          ? selectedExistingDoc.title
+          : `${selectedExistingDoc.title} (Copy)`,
+        createdAt: todayFormatted,
+        updatedAt: todayFormatted,
+        status: 'Draft',
+        syncStatus: isOnline ? 'saved' : 'offline-pending',
+      };
+      onDocumentCreated(workingCopy, false);
+    }
+  };
 
   const handleGenerate = () => {
     if (isRecording) {
@@ -991,6 +1014,58 @@ export const CreateDocumentModal: React.FC<CreateDocumentModalProps> = ({
                       Update Original Document
                     </button>
                   </div>
+                </div>
+              )}
+
+              {/* Requirement 7: Option to Continue Editing Existing Documents Without AI */}
+              {selectedExistingDoc && (
+                <div
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    padding: '10px 12px',
+                    backgroundColor: 'rgba(20, 71, 230, 0.05)',
+                    border: '1px solid rgba(20, 71, 230, 0.2)',
+                    marginTop: '4px',
+                    gap: '10px',
+                    flexWrap: 'wrap',
+                  }}
+                >
+                  <div>
+                    <div
+                      style={{
+                        fontSize: '12px',
+                        fontWeight: 700,
+                        color: 'var(--ink-navy)',
+                      }}
+                    >
+                      Continue Editing Manually
+                    </div>
+                    <div
+                      style={{
+                        fontSize: '11px',
+                        color: 'var(--ink-muted)',
+                      }}
+                    >
+                      Open in workspace directly without writing an AI prompt.
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={handleOpenExistingWithoutAI}
+                    className="btn-ed-primary"
+                    style={{
+                      padding: '7px 12px',
+                      fontSize: '10.5px',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '5px',
+                    }}
+                  >
+                    <Edit3 size={12} />
+                    <span>Continue Without AI</span>
+                  </button>
                 </div>
               )}
             </div>

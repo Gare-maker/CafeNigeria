@@ -219,6 +219,21 @@ export const CATEGORIES: CategoryMeta[] = [
       'Review, edit and export clean study notes',
     ],
   },
+  {
+    id: 'free-writing',
+    name: 'Free-Form Writing',
+    shortName: 'Writing',
+    code: 'MOD-06',
+    description:
+      'Draft essays, articles, letters, speeches, memos, proposals and general writing on any topic without category constraints.',
+    longDescription:
+      'Write freely on any topic with flexible AI assistance, outlines and editing.',
+    workflowSteps: [
+      'Describe what you want to write or start with a blank page',
+      'AI assists with drafting, structure, tone and refinement',
+      'Format freely in the rich editor and export to DOCX or PDF',
+    ],
+  },
 ];
 
 export const CATEGORY_PAGE_COPY: Record<
@@ -284,6 +299,17 @@ export const CATEGORY_PAGE_COPY: Record<
       'Upload images of handwritten notes or textbooks, or select an existing notes document to expand.',
     placeholder:
       'Describe how you want the extracted material organised (e.g., "Convert the uploaded lecture board images on cell signalling into structured headings, bullet points and 5 revision questions...")',
+  },
+  'free-writing': {
+    heading: 'Write anything freely with AI.',
+    supportingText:
+      'Draft essays, articles, speeches, letters, memos, creative work and general documents without category constraints.',
+    buttonLabel: 'Create Document',
+    modalTitle: 'Free-Form Writing Faster with AI',
+    modalSubtitle:
+      'Describe what you want to write or select an existing document from your library to continue writing.',
+    placeholder:
+      'Describe what you want to write (e.g., "Draft an insightful article on the opportunities and challenges of tech hubs across tertiary institutions in Nigeria...", or "Write a formal motivation letter for a postgraduate scholarship...")',
   },
 };
 
@@ -571,6 +597,40 @@ export const INITIAL_DOCUMENTS: DocumentItem[] = [
     `,
     aiHistory: [],
   },
+  {
+    id: 'doc-free-01',
+    title: 'Strategic Blueprint for Regional Renewable Microgrids in Nigeria',
+    category: 'free-writing',
+    createdAt: '09 November 2026',
+    updatedAt: '09 November 2026',
+    status: 'In Progress',
+    syncStatus: 'saved',
+    format: 'DOCX',
+    metadata: {
+      institution: 'Independent Policy Research',
+      department: 'Energy Infrastructure Working Group',
+      studentName: 'Victor Eghosa',
+      showPageNumbers: true,
+      orientation: 'portrait',
+      marginSize: 'normal',
+      fontFamily: 'Inter',
+    },
+    content: `
+      <h1>STRATEGIC BLUEPRINT: REGIONAL RENEWABLE MICROGRIDS IN NIGERIA</h1>
+      <p><em>An analytical policy framework for decentralised clean power infrastructure across commercial corridors.</em></p>
+      <h2>1. Executive Summary</h2>
+      <p>Access to reliable electricity remains the single greatest catalyst for economic growth and community welfare across Nigerian states. This paper outlines practical frameworks, modular technology architectures, and viable tariff models to scale private-public microgrid partnerships.</p>
+      <h2>2. Core Pillars of Sustainable Deployment</h2>
+      <ul>
+        <li><strong>Standardised Turnkey Modular Design:</strong> Drastically cuts engineering planning and deployment timelines.</li>
+        <li><strong>Pay-As-You-Go Digital Metering:</strong> Integrates local mobile banking channels for seamless daily collections and automated revenue assurance.</li>
+        <li><strong>Local Maintenance Capacity:</strong> Empowers regional vocational graduates to oversee routine servicing and maintain 98%+ operational uptime.</li>
+      </ul>
+      <h2>3. Recommendations &amp; Strategic Roadmap</h2>
+      <p>By streamlining state regulatory approvals and guaranteeing cost-reflective feed-in agreements, Nigeria's industrial hubs can achieve clean, resilient energy independence.</p>
+    `,
+    aiHistory: [],
+  },
 ];
 
 export interface OptionalDetailsInput {
@@ -612,6 +672,8 @@ function extractTitleFromPrompt(
       return 'Professional Curriculum Vitae';
     case 'image-to-notes':
       return 'Extracted & Organised Lecture Notes';
+    case 'free-writing':
+      return 'Free-Form Document';
   }
 }
 
@@ -909,6 +971,41 @@ export function generateDocumentFromNaturalPrompt(
       <li>Provide two applied examples illustrating how these principles operate in practice.</li>
     </ol>
   `;
+  if (category === 'free-writing') {
+    const content = `
+      <h1>${title.toUpperCase()}</h1>
+      <p style="font-size: 10.5pt; color: #475569; margin-bottom: 18px;">
+        <em>Drafted with AI Assistance</em> &nbsp;|&nbsp; <strong>Author / Contributor:</strong> ${student} &nbsp;|&nbsp; <strong>Context:</strong> ${inst}
+      </p>
+      ${prompt ? `<p style="font-style: italic; color: #334155; margin-bottom: 16px;">Instruction Scope: "${prompt}"</p>` : ''}
+      ${uploadedContextBlock ? `<h2>Source &amp; Reference Material</h2>${uploadedContextBlock}` : ''}
+      <h2>1. Introduction &amp; Motivation</h2>
+      <p>This document presents a comprehensive examination of <strong>${title}</strong>. Synthesising core ideas, practical perspectives, and operational realities enables a nuanced understanding of current dynamics and future trajectories.</p>
+      <h2>2. Key Analysis &amp; Thematic Discussion</h2>
+      <p>Addressing the core themes requires a balanced perspective that recognises both fundamental principles and empirical context. Stakeholder engagement, procedural clarity, and continuous iteration represent the foundation for long-term viability.</p>
+      <ul>
+        <li><strong>Structural Alignment:</strong> Aligning operational goals with modern frameworks and best practices.</li>
+        <li><strong>Capacity &amp; Execution:</strong> Ensuring adequate technical, financial, and logistical preparation.</li>
+        <li><strong>Scalable Impact:</strong> Establishing clear, measurable criteria for success.</li>
+      </ul>
+      <h2>3. Strategic Recommendations &amp; Conclusion</h2>
+      <p>In conclusion, deliberate planning and systematic implementation drive sustainable value across private and public sectors. Continued monitoring and collaborative evaluation will ensure meaningful outcomes.</p>
+    `;
+    return {
+      title,
+      content,
+      metadata: {
+        institution: inst,
+        department: dept,
+        studentName: student,
+        showPageNumbers: true,
+        orientation: 'portrait',
+        marginSize: 'normal',
+        fontFamily: 'Inter',
+      },
+    };
+  }
+
   return {
     title,
     content,

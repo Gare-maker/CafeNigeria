@@ -23,6 +23,55 @@ export const PageLayoutModal: React.FC<PageLayoutModalProps> = ({
   onApplyAndClose,
   onClose,
 }) => {
+  type MarginField =
+    | 'marginTopMm'
+    | 'marginBottomMm'
+    | 'marginLeftMm'
+    | 'marginRightMm';
+
+  const [rawMargins, setRawMargins] = React.useState<Record<MarginField, string>>({
+    marginTopMm: String(layout.marginTopMm),
+    marginBottomMm: String(layout.marginBottomMm),
+    marginLeftMm: String(layout.marginLeftMm),
+    marginRightMm: String(layout.marginRightMm),
+  });
+
+  React.useEffect(() => {
+    setRawMargins({
+      marginTopMm: String(layout.marginTopMm),
+      marginBottomMm: String(layout.marginBottomMm),
+      marginLeftMm: String(layout.marginLeftMm),
+      marginRightMm: String(layout.marginRightMm),
+    });
+  }, [
+    layout.marginTopMm,
+    layout.marginBottomMm,
+    layout.marginLeftMm,
+    layout.marginRightMm,
+  ]);
+
+  const handleMarginChange = (field: MarginField, val: string) => {
+    setRawMargins((prev) => ({ ...prev, [field]: val }));
+    const parsed = parseInt(val, 10);
+    if (!isNaN(parsed) && parsed >= 0) {
+      onChangeLayout((prev) => ({
+        ...prev,
+        marginPreset: 'custom',
+        [field]: parsed,
+      }));
+    }
+  };
+
+  const handleMarginBlur = (field: MarginField) => {
+    const current = parseInt(rawMargins[field], 10);
+    const clamped = isNaN(current) ? 20 : Math.max(0, Math.min(80, current));
+    setRawMargins((prev) => ({ ...prev, [field]: String(clamped) }));
+    onChangeLayout((prev) => ({
+      ...prev,
+      marginPreset: 'custom',
+      [field]: clamped,
+    }));
+  };
   return (
     <div className="nc-modal-backdrop no-print">
       <div className="nc-modal-dialog" style={{ maxWidth: '580px' }}>
@@ -254,16 +303,13 @@ export const PageLayoutModal: React.FC<PageLayoutModalProps> = ({
                   <label className="ed-field-label">{label}</label>
                   <input
                     type="number"
-                    min={5}
-                    max={60}
-                    value={layout[field]}
+                    min={0}
+                    max={80}
+                    value={rawMargins[field]}
                     onChange={(e) =>
-                      onChangeLayout((prev) => ({
-                        ...prev,
-                        marginPreset: 'custom',
-                        [field]: parseInt(e.target.value || '20', 10),
-                      }))
+                      handleMarginChange(field, e.target.value)
                     }
+                    onBlur={() => handleMarginBlur(field)}
                     className="ed-input"
                     style={{ padding: '6px 8px' }}
                   />

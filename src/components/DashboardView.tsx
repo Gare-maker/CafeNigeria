@@ -5,6 +5,7 @@ import {
   Presentation,
   UserCheck,
   ScanText,
+  PenTool,
   ArrowRight,
   HardDriveUpload,
 } from 'lucide-react';
@@ -36,6 +37,9 @@ const CATEGORY_ICONS: Record<DocumentCategory, React.ReactNode> = {
   cv: <UserCheck size={18} strokeWidth={1.5} color="var(--accent-blue)" />,
   'image-to-notes': (
     <ScanText size={18} strokeWidth={1.5} color="var(--accent-blue)" />
+  ),
+  'free-writing': (
+    <PenTool size={18} strokeWidth={1.5} color="var(--accent-blue)" />
   ),
 };
 

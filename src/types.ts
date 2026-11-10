@@ -3,7 +3,8 @@ export type DocumentCategory =
   | 'assignments'
   | 'seminars'
   | 'cv'
-  | 'image-to-notes';
+  | 'image-to-notes'
+  | 'free-writing';
 
 export type SyncStatus =
   | 'saved'
