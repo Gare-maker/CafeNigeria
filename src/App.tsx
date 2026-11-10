@@ -280,7 +280,6 @@ export function App() {
             onExportPdf={exportToPdf}
             onExportTxt={exportToTxt}
             onSaveToComputer={handleSaveToComputer}
-            onOpenFromComputer={handleOpenFromComputer}
           />
         )}
 

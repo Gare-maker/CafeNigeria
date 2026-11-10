@@ -130,9 +130,16 @@ export interface DocumentItem {
     drawings?: DrawingElement[];
     images?: CanvasImageElement[];
     pageGroups?: PageGroup[];
+    pages?: string[];
     localFileName?: string;
   };
   aiHistory: AIMessage[];
+}
+
+export interface ExportScopeOptions {
+  scope: 'document' | 'group' | 'page';
+  groupId?: string;
+  pageIndex?: number;
 }
 
 export interface CategoryMeta {

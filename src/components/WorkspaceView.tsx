@@ -42,13 +42,13 @@ import {
   Paperclip,
   FileText,
   HardDriveDownload,
-  HardDriveUpload,
 } from 'lucide-react';
 import {
   AIMessage,
   CanvasImageElement,
   DocumentItem,
   DrawingElement,
+  ExportScopeOptions,
   PageGroup,
   PageLayoutSettings,
   ShapeType,
@@ -74,11 +74,10 @@ interface WorkspaceViewProps {
   isSyncing: boolean;
   onBack: () => void;
   onUpdateDocument: (updated: DocumentItem) => void;
-  onExportDocx: (doc: DocumentItem) => void;
-  onExportPdf: (doc: DocumentItem) => void;
-  onExportTxt: (doc: DocumentItem) => void;
+  onExportDocx: (doc: DocumentItem, options?: ExportScopeOptions) => void;
+  onExportPdf: (doc: DocumentItem, options?: ExportScopeOptions) => void;
+  onExportTxt: (doc: DocumentItem, options?: ExportScopeOptions) => void;
   onSaveToComputer?: (doc: DocumentItem) => void;
-  onOpenFromComputer?: () => void;
 }
 
 const DEFAULT_LAYOUT: PageLayoutSettings = {
@@ -127,41 +126,20 @@ const SHAPE_OPTIONS: { type: ShapeType; label: string }[] = [
   { type: 'freehand', label: 'Freehand Draw' },
 ];
 
-function splitHtmlIntoInitialPages(html: string): string[] {
+function splitHtmlIntoInitialPages(html: string, docPages?: string[]): string[] {
+  if (docPages && docPages.length > 0) {
+    return docPages;
+  }
   const explicitParts = html
     .split(/<hr[^>]*class=["']?page-break["']?[^>]*>/i)
     .map((p) => p.trim())
     .filter((p) => p.length > 0);
 
-  if (explicitParts.length > 1) {
+  if (explicitParts.length > 0) {
     return explicitParts;
   }
 
-  const rawPart = explicitParts[0] || html || '<p><br/></p>';
-  const temp = window.document.createElement('div');
-  temp.innerHTML = rawPart;
-  const children = Array.from(temp.children);
-  if (children.length <= 7) {
-    return [rawPart];
-  }
-
-  const finalPages: string[] = [];
-  let bucket = '';
-  let charCounter = 0;
-  for (const child of children) {
-    const outer = child.outerHTML;
-    const textLen = (child.textContent || '').length;
-    if (charCounter + textLen > 1800 && bucket) {
-      finalPages.push(bucket);
-      bucket = outer;
-      charCounter = textLen;
-    } else {
-      bucket += outer;
-      charCounter += textLen;
-    }
-  }
-  if (bucket) finalPages.push(bucket);
-  return finalPages.length > 0 ? finalPages : ['<p><br/></p>'];
+  return [html || '<p><br/></p>'];
 }
 
 export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
@@ -174,7 +152,6 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
   onExportPdf,
   onExportTxt,
   onSaveToComputer,
-  onOpenFromComputer,
 }) => {
   const pageRefs = useRef<(HTMLDivElement | null)[]>([]);
   const activePageIdxRef = useRef<number>(0);
@@ -188,12 +165,18 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
 
   const [title, setTitle] = useState(doc.title);
   const [pages, setPages] = useState<string[]>(() =>
-    splitHtmlIntoInitialPages(doc.content)
+    splitHtmlIntoInitialPages(doc.content, doc.metadata.pages)
   );
   const [saveState, setSaveState] = useState<SyncStatus>(
     isOnline ? 'saved' : 'offline-pending'
   );
   const [showExportMenu, setShowExportMenu] = useState(false);
+  const [exportScope, setExportScope] = useState<'document' | 'group' | 'page'>(
+    'document'
+  );
+  const [exportGroupId, setExportGroupId] = useState<string>('');
+  const [exportPageIdx, setExportPageIdx] = useState<number>(0);
+
   const [showAiPanel, setShowAiPanel] = useState<boolean>(() =>
     typeof window !== 'undefined' ? window.innerWidth > 1024 : true
   );
@@ -327,10 +310,13 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
     aspectRatio?: number;
   } | null>(null);
 
-  // Section 10: Page Grouping by Section State
+  // Section 10: Page Grouping by Section State (Collapsed by default per Requirement 6)
   const [showGroupsSidebar, setShowGroupsSidebar] = useState(false);
-  const [pageGroups, setPageGroups] = useState<PageGroup[]>(
-    () => doc.metadata.pageGroups || []
+  const [pageGroups, setPageGroups] = useState<PageGroup[]>(() =>
+    (doc.metadata.pageGroups || []).map((g) => ({
+      ...g,
+      collapsed: g.collapsed !== undefined ? g.collapsed : true,
+    }))
   );
   const [selectedPagesForGrouping, setSelectedPagesForGrouping] = useState<
     number[]
@@ -342,11 +328,16 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
   // Re-initialize when switching document
   useEffect(() => {
     setTitle(doc.title);
-    setPages(splitHtmlIntoInitialPages(doc.content));
+    setPages(splitHtmlIntoInitialPages(doc.content, doc.metadata.pages));
     setLayout(doc.metadata.layout || DEFAULT_LAYOUT);
     setDrawings(doc.metadata.drawings || []);
     setCanvasImages(doc.metadata.images || []);
-    setPageGroups(doc.metadata.pageGroups || []);
+    setPageGroups(
+      (doc.metadata.pageGroups || []).map((g) => ({
+        ...g,
+        collapsed: g.collapsed !== undefined ? g.collapsed : true,
+      }))
+    );
     setHighlightedText('');
     setHighlightBadgePos(null);
     setShowTextAiPopup(false);
@@ -354,15 +345,65 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
     savedRangeRef.current = null;
   }, [doc.id]);
 
-  // Populate DOM page contents when pages array updates
+  // Populate DOM page contents when pages array updates, but NEVER overwrite the active element while the user is typing/editing (prevents Space & cursor jumping)
   useEffect(() => {
     pages.forEach((pageHtml, idx) => {
       const el = pageRefs.current[idx];
-      if (el && el.innerHTML !== pageHtml) {
+      if (
+        el &&
+        window.document.activeElement !== el &&
+        !el.contains(window.document.activeElement) &&
+        el.innerHTML !== pageHtml
+      ) {
         el.innerHTML = pageHtml;
       }
     });
   }, [pages]);
+
+  // Requirement 4: Keyboard interactions (Backspace/Delete deletes selected shape or image)
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      const activeEl = window.document.activeElement as HTMLElement | null;
+      const isInput =
+        activeEl &&
+        (activeEl.tagName === 'INPUT' ||
+          activeEl.tagName === 'TEXTAREA' ||
+          activeEl.isContentEditable);
+
+      if (!isInput && (e.key === 'Backspace' || e.key === 'Delete')) {
+        if (selectedDrawingId) {
+          e.preventDefault();
+          e.stopPropagation();
+          setDrawings((prev) => {
+            const next = prev.filter((d) => d.id !== selectedDrawingId);
+            triggerAutoSave({ overrideDrawings: next });
+            return next;
+          });
+          setSelectedDrawingId(null);
+        } else if (selectedImageId) {
+          e.preventDefault();
+          e.stopPropagation();
+          setCanvasImages((prev) => {
+            const next = prev.filter((img) => img.id !== selectedImageId);
+            triggerAutoSave({ overrideImages: next });
+            return next;
+          });
+          setSelectedImageId(null);
+        }
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [selectedDrawingId, selectedImageId]);
+
+  // Requirement 11: Reliable autosaving and beforeunload flush
+  useEffect(() => {
+    const handleBeforeUnload = () => {
+      triggerAutoSave();
+    };
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    return () => window.removeEventListener('beforeunload', handleBeforeUnload);
+  }, [pages, title, layout, drawings, canvasImages, pageGroups]);
 
   // Close overlay dropdowns on outside click
   useEffect(() => {
@@ -576,10 +617,36 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
         top: rect.top,
         left: rect.right,
       });
-    } else if (!showTextAiPopup) {
-      setHighlightedText('');
-      setHighlightBadgePos(null);
     }
+  };
+
+  // Requirement 1: Open Text AI popup and keep the text visibly highlighted
+  const handleOpenTextAiPopup = () => {
+    if (savedRangeRef.current && highlightedText) {
+      try {
+        const mark = window.document.createElement('mark');
+        mark.className = 'ai-persistent-selection';
+        savedRangeRef.current.surroundContents(mark);
+      } catch {
+        // partial tag selection handles via savedRangeRef
+      }
+    }
+    setShowTextAiPopup(true);
+  };
+
+  const handleCloseTextAiPopup = () => {
+    setShowTextAiPopup(false);
+    const pageEl = pageRefs.current[highlightPageIdx];
+    if (pageEl) {
+      const marks = pageEl.querySelectorAll('mark.ai-persistent-selection');
+      marks.forEach((m) => {
+        const parent = m.parentNode;
+        while (m.firstChild) parent?.insertBefore(m.firstChild, m);
+        m.remove();
+      });
+    }
+    setHighlightedText('');
+    setHighlightBadgePos(null);
   };
 
   // Requirement 4: Execute Text-Level AI and replace ONLY the highlighted text
@@ -588,12 +655,19 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
     const result = runTextLevelAI(highlightedText, instruction);
     const pageEl = pageRefs.current[highlightPageIdx];
 
-    if (pageEl && savedRangeRef.current) {
-      pageEl.focus();
-      const sel = window.getSelection();
-      sel?.removeAllRanges();
-      sel?.addRange(savedRangeRef.current);
-      window.document.execCommand('insertHTML', false, result.updatedHtml);
+    if (pageEl) {
+      const mark = pageEl.querySelector('mark.ai-persistent-selection');
+      if (mark) {
+        const temp = window.document.createElement('span');
+        temp.innerHTML = result.updatedHtml;
+        mark.replaceWith(...Array.from(temp.childNodes));
+      } else if (savedRangeRef.current) {
+        pageEl.focus();
+        const sel = window.getSelection();
+        sel?.removeAllRanges();
+        sel?.addRange(savedRangeRef.current);
+        window.document.execCommand('insertHTML', false, result.updatedHtml);
+      }
       checkAndFlowPages(highlightPageIdx);
     }
 
@@ -1198,27 +1272,40 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
             };
           }
 
-          // Side handles adjust width or height independently (Requirement 10)
+          // Side handles also maintain aspect ratio proportionally (Requirement 3)
           if (dragState.mode === 'resize-e') {
-            return { ...img, width: Math.max(40, origW + dx) };
+            const nextW = Math.max(40, origW + dx);
+            return {
+              ...img,
+              width: Math.round(nextW),
+              height: Math.round(nextW / ratio),
+            };
           }
           if (dragState.mode === 'resize-w') {
             const nextW = Math.max(40, origW - dx);
             return {
               ...img,
               x: dragState.origX2 - nextW,
-              width: nextW,
+              width: Math.round(nextW),
+              height: Math.round(nextW / ratio),
             };
           }
           if (dragState.mode === 'resize-s') {
-            return { ...img, height: Math.max(40, origH + dy) };
+            const nextH = Math.max(30, origH + dy);
+            return {
+              ...img,
+              height: Math.round(nextH),
+              width: Math.round(nextH * ratio),
+            };
           }
           if (dragState.mode === 'resize-n') {
-            const nextH = Math.max(40, origH - dy);
+            const nextH = Math.max(30, origH - dy);
+            const nextW = Math.round(nextH * ratio);
             return {
               ...img,
               y: dragState.origY2 - nextH,
-              height: nextH,
+              height: Math.round(nextH),
+              width: nextW,
             };
           }
           return img;
@@ -1239,46 +1326,61 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
     });
   };
 
-  // Layer Ordering (Bring to Front, Bring Forward, Send Backward, Send to Back)
+  // Requirement 2: Fixed Shape & Image Layer Ordering with Intermediate Step Support
   const handleLayerAction = (
     action: 'front' | 'forward' | 'backward' | 'back'
   ) => {
-    const allZs = [
-      ...drawings.map((d) => d.zIndex ?? 10),
-      ...canvasImages.map((i) => i.zIndex ?? 10),
-    ];
-    const maxZ = allZs.length > 0 ? Math.max(...allZs) : 10;
-    const minZ = allZs.length > 0 ? Math.min(...allZs) : 1;
+    const pageIdx = activePageIdxRef.current;
+    const pageDrawings = drawings.filter((d) => d.pageIndex === pageIdx);
+    const pageImages = canvasImages.filter((im) => im.pageIndex === pageIdx);
+
+    // All distinct stacking levels on this page, including the Text layer at zIndex: 6
+    const allZs = Array.from(
+      new Set([
+        ...pageDrawings.map((d) => d.zIndex ?? 10),
+        ...pageImages.map((im) => im.zIndex ?? 12),
+        6, // Text Layer boundary
+      ])
+    ).sort((a, b) => a - b);
+
+    const maxZ = allZs[allZs.length - 1] ?? 12;
+    const minZ = allZs[0] ?? 1;
+
+    const computeNewZ = (curZ: number) => {
+      if (action === 'front') return maxZ + 2;
+      if (action === 'back') return Math.max(1, minZ - 2);
+
+      if (action === 'backward') {
+        const smaller = allZs.filter((z) => z < curZ);
+        if (smaller.length === 0) return Math.max(1, curZ - 1);
+        const nextUnder = smaller[smaller.length - 1];
+        // Move behind the immediate layer below it
+        return Math.max(1, nextUnder - 1);
+      }
+
+      if (action === 'forward') {
+        const larger = allZs.filter((z) => z > curZ);
+        if (larger.length === 0) return curZ + 2;
+        const nextOver = larger[0];
+        // Move in front of the immediate layer above it
+        return nextOver + 1;
+      }
+      return curZ;
+    };
 
     if (selectedDrawingId) {
       const next = drawings.map((d) => {
         if (d.id !== selectedDrawingId) return d;
         const cur = d.zIndex ?? 10;
-        const zIndex =
-          action === 'front'
-            ? maxZ + 2
-            : action === 'forward'
-            ? cur + 1
-            : action === 'backward'
-            ? Math.max(1, cur - 1)
-            : Math.max(1, minZ - 1);
-        return { ...d, zIndex };
+        return { ...d, zIndex: computeNewZ(cur) };
       });
       setDrawings(next);
       triggerAutoSave({ overrideDrawings: next });
     } else if (selectedImageId) {
       const next = canvasImages.map((img) => {
         if (img.id !== selectedImageId) return img;
-        const cur = img.zIndex ?? 10;
-        const zIndex =
-          action === 'front'
-            ? maxZ + 2
-            : action === 'forward'
-            ? cur + 1
-            : action === 'backward'
-            ? Math.max(1, cur - 1)
-            : Math.max(1, minZ - 1);
-        return { ...img, zIndex };
+        const cur = img.zIndex ?? 12;
+        return { ...img, zIndex: computeNewZ(cur) };
       });
       setCanvasImages(next);
       triggerAutoSave({ overrideImages: next });
@@ -1485,6 +1587,199 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
   const activeGroupObj =
     pageGroups.find((g) => g.id === aiTargetGroupId) || null;
 
+  // Requirement 11: Save all state before navigating away
+  const handleBackSafely = () => {
+    triggerAutoSave();
+    onBack();
+  };
+
+  const renderShapeElement = (d: DrawingElement) => {
+    const isSel = selectedDrawingId === d.id;
+    const dash =
+      d.lineStyle === 'dashed'
+        ? '6,4'
+        : d.lineStyle === 'dotted'
+        ? '2,3'
+        : undefined;
+    const fill =
+      d.fillColor && d.fillColor !== 'transparent'
+        ? d.fillColor
+        : 'transparent';
+    const x = Math.min(d.x1, d.x2);
+    const y = Math.min(d.y1, d.y2);
+    const w = Math.max(4, Math.abs(d.x2 - d.x1));
+    const h = Math.max(4, Math.abs(d.y2 - d.y1));
+
+    return (
+      <g
+        key={d.id}
+        style={{
+          pointerEvents: 'all',
+          cursor: 'move',
+        }}
+        onMouseDown={(e) => {
+          e.stopPropagation();
+          setSelectedDrawingId(d.id);
+          setSelectedImageId(null);
+          const pageEl = e.currentTarget.ownerSVGElement?.parentElement;
+          if (!pageEl) return;
+          const coords = getPageRelativeCoords(pageEl, e);
+          setDragState({
+            targetKind: 'shape',
+            mode: 'move',
+            id: d.id,
+            pageIdx: d.pageIndex,
+            startX: coords.x,
+            startY: coords.y,
+            origX1: d.x1,
+            origY1: d.y1,
+            origX2: d.x2,
+            origY2: d.y2,
+          });
+        }}
+      >
+        {(d.type === 'rect' || d.type === 'square') && (
+          <rect
+            x={x}
+            y={y}
+            width={w}
+            height={h}
+            fill={fill}
+            stroke={d.strokeColor}
+            strokeWidth={d.strokeWidth}
+            strokeDasharray={dash}
+          />
+        )}
+
+        {d.type === 'ellipse' && (
+          <ellipse
+            cx={x + w / 2}
+            cy={y + h / 2}
+            rx={w / 2}
+            ry={h / 2}
+            fill={fill}
+            stroke={d.strokeColor}
+            strokeWidth={d.strokeWidth}
+            strokeDasharray={dash}
+          />
+        )}
+
+        {d.type === 'triangle' && (
+          <polygon
+            points={`${x + w / 2},${y} ${x + w},${y + h} ${x},${y + h}`}
+            fill={fill}
+            stroke={d.strokeColor}
+            strokeWidth={d.strokeWidth}
+            strokeDasharray={dash}
+          />
+        )}
+
+        {d.type === 'diamond' && (
+          <polygon
+            points={`${x + w / 2},${y} ${x + w},${y + h / 2} ${x + w / 2},${
+              y + h
+            } ${x},${y + h / 2}`}
+            fill={fill}
+            stroke={d.strokeColor}
+            strokeWidth={d.strokeWidth}
+            strokeDasharray={dash}
+          />
+        )}
+
+        {d.type === 'freehand' && d.points && d.points.length > 1 && (
+          <path
+            d={d.points
+              .map((pt, i) => `${i === 0 ? 'M' : 'L'} ${pt.x} ${pt.y}`)
+              .join(' ')}
+            fill="none"
+            stroke={d.strokeColor}
+            strokeWidth={d.strokeWidth}
+            strokeDasharray={dash}
+          />
+        )}
+
+        {(d.type === 'line' ||
+          d.type === 'hline' ||
+          d.type === 'vline' ||
+          d.type === 'arrow') && (
+          <line
+            x1={d.x1}
+            y1={d.y1}
+            x2={d.x2}
+            y2={d.y2}
+            stroke={d.strokeColor}
+            strokeWidth={Math.max(3, d.strokeWidth)}
+            strokeDasharray={dash}
+            markerEnd={
+              d.type === 'arrow' ? `url(#arrow-${d.pageIndex})` : undefined
+            }
+          />
+        )}
+
+        {isSel && (
+          <>
+            <circle
+              cx={d.x1}
+              cy={d.y1}
+              r={6}
+              fill="#FFFFFF"
+              stroke="#1447E6"
+              strokeWidth={2}
+              style={{ cursor: 'nwse-resize' }}
+              onMouseDown={(e) => {
+                e.stopPropagation();
+                const pageEl =
+                  e.currentTarget.ownerSVGElement?.parentElement;
+                if (!pageEl) return;
+                const coords = getPageRelativeCoords(pageEl, e);
+                setDragState({
+                  targetKind: 'shape',
+                  mode: 'resize-nw',
+                  id: d.id,
+                  pageIdx: d.pageIndex,
+                  startX: coords.x,
+                  startY: coords.y,
+                  origX1: d.x1,
+                  origY1: d.y1,
+                  origX2: d.x2,
+                  origY2: d.y2,
+                });
+              }}
+            />
+            <circle
+              cx={d.x2}
+              cy={d.y2}
+              r={6}
+              fill="#FFFFFF"
+              stroke="#1447E6"
+              strokeWidth={2}
+              style={{ cursor: 'nwse-resize' }}
+              onMouseDown={(e) => {
+                e.stopPropagation();
+                const pageEl =
+                  e.currentTarget.ownerSVGElement?.parentElement;
+                if (!pageEl) return;
+                const coords = getPageRelativeCoords(pageEl, e);
+                setDragState({
+                  targetKind: 'shape',
+                  mode: 'resize-se',
+                  id: d.id,
+                  pageIdx: d.pageIndex,
+                  startX: coords.x,
+                  startY: coords.y,
+                  origX1: d.x1,
+                  origY1: d.y1,
+                  origX2: d.x2,
+                  origY2: d.y2,
+                });
+              }}
+            />
+          </>
+        )}
+      </g>
+    );
+  };
+
   return (
     <div
       style={{
@@ -1504,7 +1799,7 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
       />
 
       {/* =====================================================================
-          TOP WORKSPACE HEADER (Includes Local File Save/Open per Requirement 14)
+          TOP WORKSPACE HEADER (Includes Local File Save per Requirement 14)
       ===================================================================== */}
       <header
         className="no-print"
@@ -1530,7 +1825,7 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
           }}
         >
           <button
-            onClick={onBack}
+            onClick={handleBackSafely}
             className="btn-ed-subtle"
             style={{ height: '32px', padding: '0 10px' }}
             title="Back to Documents"
@@ -1665,7 +1960,7 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
             <Redo2 size={14} />
           </button>
 
-          {/* Requirement 14: Save Individual File to Computer & Open File */}
+          {/* Requirement 14: Save Individual File to Computer */}
           {onSaveToComputer && (
             <button
               onClick={() =>
@@ -1679,6 +1974,7 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
                     drawings,
                     images: canvasImages,
                     pageGroups,
+                    pages,
                   },
                 })
               }
@@ -1691,19 +1987,7 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
             </button>
           )}
 
-          {onOpenFromComputer && (
-            <button
-              onClick={onOpenFromComputer}
-              className="btn-ed-subtle hide-on-mobile"
-              style={{ height: '32px', padding: '0 10px' }}
-              title="Open a saved document file from your computer"
-            >
-              <HardDriveUpload size={13} />
-              <span>Open File</span>
-            </button>
-          )}
-
-          {/* Export Dropdown */}
+          {/* Requirement 10: Export Dropdown with Scope (Entire Doc, Individual Group, or Specific Page) and Formats */}
           <div ref={exportMenuRef} style={{ position: 'relative' }}>
             <button
               onClick={() => setShowExportMenu((prev) => !prev)}
@@ -1721,95 +2005,251 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
                   position: 'fixed',
                   top: '52px',
                   right: '96px',
-                  width: '195px',
+                  width: '240px',
                   backgroundColor: 'var(--bg-ivory)',
                   border: '1px solid var(--border-stone)',
                   boxShadow: '0 10px 28px rgba(10, 25, 78, 0.18)',
                   zIndex: 250,
+                  padding: '12px',
                 }}
               >
-                <button
-                  onClick={() => {
-                    setShowExportMenu(false);
-                    onExportDocx({
-                      ...doc,
-                      title,
-                      content: getCombinedCleanHtml(),
-                      metadata: {
-                        ...doc.metadata,
-                        layout,
-                        drawings,
-                        images: canvasImages,
-                        pageGroups,
-                      },
-                    });
-                  }}
+                <div
+                  className="mono-label"
                   style={{
-                    width: '100%',
-                    textAlign: 'left',
-                    padding: '10px 14px',
-                    background: 'none',
-                    border: 'none',
-                    borderBottom: '1px solid var(--border-ivory)',
-                    fontSize: '12.5px',
-                    color: 'var(--ink-navy)',
-                    cursor: 'pointer',
+                    fontSize: '9px',
+                    marginBottom: '6px',
+                    color: 'var(--ink-muted)',
                   }}
                 >
-                  Word Document (.DOCX)
-                </button>
-                <button
-                  onClick={() => {
-                    setShowExportMenu(false);
-                    onExportPdf({
-                      ...doc,
-                      title,
-                      content: getCombinedCleanHtml(),
-                      metadata: {
-                        ...doc.metadata,
-                        layout,
-                        drawings,
-                        images: canvasImages,
-                        pageGroups,
-                      },
-                    });
-                  }}
+                  1. Export Scope
+                </div>
+                <div
                   style={{
-                    width: '100%',
-                    textAlign: 'left',
-                    padding: '10px 14px',
-                    background: 'none',
-                    border: 'none',
-                    borderBottom: '1px solid var(--border-ivory)',
-                    fontSize: '12.5px',
-                    color: 'var(--ink-navy)',
-                    cursor: 'pointer',
+                    display: 'flex',
+                    gap: '4px',
+                    marginBottom: '8px',
                   }}
                 >
-                  PDF Document (.PDF)
-                </button>
-                <button
-                  onClick={() => {
-                    setShowExportMenu(false);
-                    onExportTxt({
-                      ...doc,
-                      title,
-                      content: getCombinedCleanHtml(),
-                    });
-                  }}
+                  <button
+                    type="button"
+                    onClick={() => setExportScope('document')}
+                    className={
+                      exportScope === 'document'
+                        ? 'btn-ed-primary'
+                        : 'btn-ed-subtle'
+                    }
+                    style={{ flex: 1, padding: '4px 6px', fontSize: '9px' }}
+                  >
+                    Entire Doc
+                  </button>
+                  {pageGroups.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setExportScope('group');
+                        if (!exportGroupId && pageGroups[0]) {
+                          setExportGroupId(pageGroups[0].id);
+                        }
+                      }}
+                      className={
+                        exportScope === 'group'
+                          ? 'btn-ed-primary'
+                          : 'btn-ed-subtle'
+                      }
+                      style={{ flex: 1, padding: '4px 6px', fontSize: '9px' }}
+                    >
+                      Group
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => setExportScope('page')}
+                    className={
+                      exportScope === 'page'
+                        ? 'btn-ed-primary'
+                        : 'btn-ed-subtle'
+                    }
+                    style={{ flex: 1, padding: '4px 6px', fontSize: '9px' }}
+                  >
+                    Page
+                  </button>
+                </div>
+
+                {exportScope === 'group' && pageGroups.length > 0 && (
+                  <select
+                    value={exportGroupId || pageGroups[0]?.id}
+                    onChange={(e) => setExportGroupId(e.target.value)}
+                    className="ed-select"
+                    style={{
+                      padding: '4px 6px',
+                      fontSize: '11px',
+                      marginBottom: '8px',
+                    }}
+                  >
+                    {pageGroups.map((g) => (
+                      <option key={g.id} value={g.id}>
+                        {g.name}
+                      </option>
+                    ))}
+                  </select>
+                )}
+
+                {exportScope === 'page' && (
+                  <select
+                    value={exportPageIdx}
+                    onChange={(e) =>
+                      setExportPageIdx(parseInt(e.target.value, 10))
+                    }
+                    className="ed-select"
+                    style={{
+                      padding: '4px 6px',
+                      fontSize: '11px',
+                      marginBottom: '8px',
+                    }}
+                  >
+                    {pages.map((_, i) => (
+                      <option key={i} value={i}>
+                        Page {i + 1}
+                      </option>
+                    ))}
+                  </select>
+                )}
+
+                <div
+                  className="mono-label"
                   style={{
-                    width: '100%',
-                    textAlign: 'left',
-                    padding: '10px 14px',
-                    background: 'none',
-                    border: 'none',
-                    fontSize: '12.5px',
-                    color: 'var(--ink-navy)',
-                    cursor: 'pointer',
+                    fontSize: '9px',
+                    marginBottom: '6px',
+                    color: 'var(--ink-muted)',
                   }}
                 >
-                  Plain Text (.TXT)
-                </button>
+                  2. Choose Format
+                </div>
+                <div
+                  style={{
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: '4px',
+                  }}
+                >
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowExportMenu(false);
+                      onExportDocx(
+                        {
+                          ...doc,
+                          title,
+                          content: getCombinedCleanHtml(),
+                          metadata: {
+                            ...doc.metadata,
+                            layout,
+                            drawings,
+                            images: canvasImages,
+                            pageGroups,
+                            pages,
+                          },
+                        },
+                        {
+                          scope: exportScope,
+                          groupId:
+                            exportScope === 'group'
+                              ? exportGroupId || pageGroups[0]?.id
+                              : undefined,
+                          pageIndex:
+                            exportScope === 'page' ? exportPageIdx : undefined,
+                        }
+                      );
+                    }}
+                    className="btn-ed-subtle"
+                    style={{
+                      justifyContent: 'flex-start',
+                      padding: '6px 10px',
+                      fontSize: '11px',
+                      textAlign: 'left',
+                    }}
+                  >
+                    Word Document (.DOCX)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowExportMenu(false);
+                      onExportPdf(
+                        {
+                          ...doc,
+                          title,
+                          content: getCombinedCleanHtml(),
+                          metadata: {
+                            ...doc.metadata,
+                            layout,
+                            drawings,
+                            images: canvasImages,
+                            pageGroups,
+                            pages,
+                          },
+                        },
+                        {
+                          scope: exportScope,
+                          groupId:
+                            exportScope === 'group'
+                              ? exportGroupId || pageGroups[0]?.id
+                              : undefined,
+                          pageIndex:
+                            exportScope === 'page' ? exportPageIdx : undefined,
+                        }
+                      );
+                    }}
+                    className="btn-ed-subtle"
+                    style={{
+                      justifyContent: 'flex-start',
+                      padding: '6px 10px',
+                      fontSize: '11px',
+                      textAlign: 'left',
+                    }}
+                  >
+                    PDF Document (.PDF)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowExportMenu(false);
+                      onExportTxt(
+                        {
+                          ...doc,
+                          title,
+                          content: getCombinedCleanHtml(),
+                          metadata: {
+                            ...doc.metadata,
+                            layout,
+                            drawings,
+                            images: canvasImages,
+                            pageGroups,
+                            pages,
+                          },
+                        },
+                        {
+                          scope: exportScope,
+                          groupId:
+                            exportScope === 'group'
+                              ? exportGroupId || pageGroups[0]?.id
+                              : undefined,
+                          pageIndex:
+                            exportScope === 'page' ? exportPageIdx : undefined,
+                        }
+                      );
+                    }}
+                    className="btn-ed-subtle"
+                    style={{
+                      justifyContent: 'flex-start',
+                      padding: '6px 10px',
+                      fontSize: '11px',
+                      textAlign: 'left',
+                    }}
+                  >
+                    Plain Text (.TXT)
+                  </button>
+                </div>
               </div>
             )}
           </div>
@@ -2544,12 +2984,8 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
           selectedText={highlightedText}
           badgePosition={highlightBadgePos}
           isOpen={showTextAiPopup}
-          onOpenPopup={() => setShowTextAiPopup(true)}
-          onClose={() => {
-            setShowTextAiPopup(false);
-            setHighlightedText('');
-            setHighlightBadgePos(null);
-          }}
+          onOpenPopup={handleOpenTextAiPopup}
+          onClose={handleCloseTextAiPopup}
           onSubmitTextAI={handleExecuteTextLevelAI}
         />
       )}
@@ -3026,13 +3462,14 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
                         style={{
                           width: '100%',
                           height: '100%',
-                          objectFit: 'fill',
+                          objectFit: 'contain',
                           display: 'block',
                           pointerEvents: 'none',
+                          imageRendering: 'auto',
                         }}
                       />
 
-                      {/* 8 Resize Handles: Corners (maintain aspect ratio) + Sides (independent W/H) */}
+                      {/* 8 Resize Handles: Corners (maintain aspect ratio) + Sides (proportional) */}
                       {isSel &&
                         (
                           [
@@ -3082,8 +3519,78 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
                   );
                 })}
 
-                {/* Requirement 11 & 12: Unrestricted Full-Page Vector Shape Layer (Figma-style anywhere on page) */}
-                {(pageDrawings.length > 0 || activeShapeTool !== 'select') && (
+                {/* Layer Stacking: Background Shapes (zIndex: 2, behind text layer) */}
+                {pageDrawings.some((d) => (d.zIndex ?? 10) < 6) && (
+                  <svg
+                    width="100%"
+                    height="100%"
+                    style={{
+                      position: 'absolute',
+                      inset: 0,
+                      pointerEvents: 'all',
+                      zIndex: 2,
+                    }}
+                  >
+                    <defs>
+                      <marker
+                        id={`arrow-bg-${pageIdx}`}
+                        markerWidth="10"
+                        markerHeight="10"
+                        refX="8"
+                        refY="3"
+                        orient="auto"
+                      >
+                        <path d="M0,0 L0,6 L9,3 z" fill={strokeColor} />
+                      </marker>
+                    </defs>
+                    {pageDrawings
+                      .filter((d) => (d.zIndex ?? 10) < 6)
+                      .map(renderShapeElement)}
+                  </svg>
+                )}
+
+                {/* Editable Page Content Area (zIndex: 6, transparent background) */}
+                <div
+                  ref={(el) => {
+                    pageRefs.current[pageIdx] = el;
+                  }}
+                  contentEditable
+                  suppressContentEditableWarning
+                  onFocus={() => {
+                    activePageIdxRef.current = pageIdx;
+                  }}
+                  onClick={(e) => handlePageSelection(pageIdx, e)}
+                  onInput={() => checkAndFlowPages(pageIdx)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' || e.key === ' ') {
+                      e.stopPropagation();
+                    }
+                  }}
+                  onMouseDown={(e) =>
+                    handlePageMouseDownForTableResize(pageIdx, e)
+                  }
+                  onMouseMove={(e) =>
+                    handlePageMouseMoveForTableResize(pageIdx, e)
+                  }
+                  onMouseUp={(e) => {
+                    handlePageMouseUpForTableResize();
+                    handlePageSelection(pageIdx, e);
+                  }}
+                  onKeyUp={(e) => handlePageSelection(pageIdx, e)}
+                  className="doc-editable-body"
+                  style={{
+                    position: 'relative',
+                    zIndex: 6,
+                    background: 'transparent',
+                    lineHeight: lineSpacing,
+                    columnCount: layout.columns,
+                    columnGap: `${layout.columnGapPx}px`,
+                  }}
+                />
+
+                {/* Layer Stacking: Foreground Shapes & Active Canvas Drawing (zIndex: 18, in front of text layer) */}
+                {(pageDrawings.some((d) => (d.zIndex ?? 10) >= 6) ||
+                  activeShapeTool !== 'select') && (
                   <svg
                     width="100%"
                     height="100%"
@@ -3111,244 +3618,11 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
                         <path d="M0,0 L0,6 L9,3 z" fill={strokeColor} />
                       </marker>
                     </defs>
-
-                    {pageDrawings.map((d) => {
-                      const isSel = selectedDrawingId === d.id;
-                      const dash =
-                        d.lineStyle === 'dashed'
-                          ? '6,4'
-                          : d.lineStyle === 'dotted'
-                          ? '2,3'
-                          : undefined;
-                      const fill =
-                        d.fillColor && d.fillColor !== 'transparent'
-                          ? d.fillColor
-                          : 'transparent';
-                      const x = Math.min(d.x1, d.x2);
-                      const y = Math.min(d.y1, d.y2);
-                      const w = Math.max(4, Math.abs(d.x2 - d.x1));
-                      const h = Math.max(4, Math.abs(d.y2 - d.y1));
-
-                      return (
-                        <g
-                          key={d.id}
-                          style={{
-                            pointerEvents: 'all',
-                            cursor: 'move',
-                          }}
-                          onMouseDown={(e) => {
-                            e.stopPropagation();
-                            setSelectedDrawingId(d.id);
-                            setSelectedImageId(null);
-                            const pageEl =
-                              e.currentTarget.ownerSVGElement?.parentElement;
-                            if (!pageEl) return;
-                            const coords = getPageRelativeCoords(pageEl, e);
-                            setDragState({
-                              targetKind: 'shape',
-                              mode: 'move',
-                              id: d.id,
-                              pageIdx,
-                              startX: coords.x,
-                              startY: coords.y,
-                              origX1: d.x1,
-                              origY1: d.y1,
-                              origX2: d.x2,
-                              origY2: d.y2,
-                            });
-                          }}
-                        >
-                          {(d.type === 'rect' || d.type === 'square') && (
-                            <rect
-                              x={x}
-                              y={y}
-                              width={w}
-                              height={h}
-                              fill={fill}
-                              stroke={d.strokeColor}
-                              strokeWidth={d.strokeWidth}
-                              strokeDasharray={dash}
-                            />
-                          )}
-
-                          {d.type === 'ellipse' && (
-                            <ellipse
-                              cx={x + w / 2}
-                              cy={y + h / 2}
-                              rx={w / 2}
-                              ry={h / 2}
-                              fill={fill}
-                              stroke={d.strokeColor}
-                              strokeWidth={d.strokeWidth}
-                              strokeDasharray={dash}
-                            />
-                          )}
-
-                          {d.type === 'triangle' && (
-                            <polygon
-                              points={`${x + w / 2},${y} ${x + w},${y + h} ${x},${
-                                y + h
-                              }`}
-                              fill={fill}
-                              stroke={d.strokeColor}
-                              strokeWidth={d.strokeWidth}
-                              strokeDasharray={dash}
-                            />
-                          )}
-
-                          {d.type === 'diamond' && (
-                            <polygon
-                              points={`${x + w / 2},${y} ${x + w},${
-                                y + h / 2
-                              } ${x + w / 2},${y + h} ${x},${y + h / 2}`}
-                              fill={fill}
-                              stroke={d.strokeColor}
-                              strokeWidth={d.strokeWidth}
-                              strokeDasharray={dash}
-                            />
-                          )}
-
-                          {d.type === 'freehand' &&
-                            d.points &&
-                            d.points.length > 1 && (
-                              <path
-                                d={d.points
-                                  .map(
-                                    (pt, i) =>
-                                      `${i === 0 ? 'M' : 'L'} ${pt.x} ${pt.y}`
-                                  )
-                                  .join(' ')}
-                                fill="none"
-                                stroke={d.strokeColor}
-                                strokeWidth={d.strokeWidth}
-                                strokeDasharray={dash}
-                              />
-                            )}
-
-                          {(d.type === 'line' ||
-                            d.type === 'hline' ||
-                            d.type === 'vline' ||
-                            d.type === 'arrow') && (
-                            <line
-                              x1={d.x1}
-                              y1={d.y1}
-                              x2={d.x2}
-                              y2={d.y2}
-                              stroke={d.strokeColor}
-                              strokeWidth={Math.max(3, d.strokeWidth)}
-                              strokeDasharray={dash}
-                              markerEnd={
-                                d.type === 'arrow'
-                                  ? `url(#arrow-${pageIdx})`
-                                  : undefined
-                              }
-                            />
-                          )}
-
-                          {isSel && (
-                            <>
-                              <circle
-                                cx={d.x1}
-                                cy={d.y1}
-                                r={6}
-                                fill="#FFFFFF"
-                                stroke="#1447E6"
-                                strokeWidth={2}
-                                style={{ cursor: 'nwse-resize' }}
-                                onMouseDown={(e) => {
-                                  e.stopPropagation();
-                                  const pageEl =
-                                    e.currentTarget.ownerSVGElement
-                                      ?.parentElement;
-                                  if (!pageEl) return;
-                                  const coords = getPageRelativeCoords(
-                                    pageEl,
-                                    e
-                                  );
-                                  setDragState({
-                                    targetKind: 'shape',
-                                    mode: 'resize-nw',
-                                    id: d.id,
-                                    pageIdx,
-                                    startX: coords.x,
-                                    startY: coords.y,
-                                    origX1: d.x1,
-                                    origY1: d.y1,
-                                    origX2: d.x2,
-                                    origY2: d.y2,
-                                  });
-                                }}
-                              />
-                              <circle
-                                cx={d.x2}
-                                cy={d.y2}
-                                r={6}
-                                fill="#FFFFFF"
-                                stroke="#1447E6"
-                                strokeWidth={2}
-                                style={{ cursor: 'nwse-resize' }}
-                                onMouseDown={(e) => {
-                                  e.stopPropagation();
-                                  const pageEl =
-                                    e.currentTarget.ownerSVGElement
-                                      ?.parentElement;
-                                  if (!pageEl) return;
-                                  const coords = getPageRelativeCoords(
-                                    pageEl,
-                                    e
-                                  );
-                                  setDragState({
-                                    targetKind: 'shape',
-                                    mode: 'resize-se',
-                                    id: d.id,
-                                    pageIdx,
-                                    startX: coords.x,
-                                    startY: coords.y,
-                                    origX1: d.x1,
-                                    origY1: d.y1,
-                                    origX2: d.x2,
-                                    origY2: d.y2,
-                                  });
-                                }}
-                              />
-                            </>
-                          )}
-                        </g>
-                      );
-                    })}
+                    {pageDrawings
+                      .filter((d) => (d.zIndex ?? 10) >= 6)
+                      .map(renderShapeElement)}
                   </svg>
                 )}
-
-                {/* Editable Page Content Area */}
-                <div
-                  ref={(el) => {
-                    pageRefs.current[pageIdx] = el;
-                  }}
-                  contentEditable
-                  suppressContentEditableWarning
-                  onFocus={() => {
-                    activePageIdxRef.current = pageIdx;
-                  }}
-                  onClick={(e) => handlePageSelection(pageIdx, e)}
-                  onInput={() => checkAndFlowPages(pageIdx)}
-                  onMouseDown={(e) =>
-                    handlePageMouseDownForTableResize(pageIdx, e)
-                  }
-                  onMouseMove={(e) =>
-                    handlePageMouseMoveForTableResize(pageIdx, e)
-                  }
-                  onMouseUp={(e) => {
-                    handlePageMouseUpForTableResize();
-                    handlePageSelection(pageIdx, e);
-                  }}
-                  onKeyUp={(e) => handlePageSelection(pageIdx, e)}
-                  className="doc-editable-body"
-                  style={{
-                    lineHeight: lineSpacing,
-                    columnCount: layout.columns,
-                    columnGap: `${layout.columnGapPx}px`,
-                  }}
-                />
 
                 {/* Page Footer & Page Numbering */}
                 <div

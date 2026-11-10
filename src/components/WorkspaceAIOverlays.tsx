@@ -919,32 +919,56 @@ export const ElementLayerToolbar: React.FC<ElementLayerToolbarProps> = ({
             min={40}
             max={740}
             value={Math.round(selectedImage.width)}
-            onChange={(e) =>
+            onChange={(e) => {
+              const ratio = selectedImage.aspectRatio || 1.33;
+              const nextW = Math.max(40, parseInt(e.target.value || '160', 10));
               onUpdateImage({
-                width: Math.max(40, parseInt(e.target.value || '160', 10)),
-              })
-            }
+                width: nextW,
+                height: Math.max(30, Math.round(nextW / ratio)),
+              });
+            }}
             className="ed-input"
             style={{ width: '60px', padding: '3px 5px', fontSize: '11px' }}
+            title="Image Width (preserves aspect ratio)"
           />
           <span className="mono-label" style={{ fontSize: '9px' }}>
             H:
           </span>
           <input
             type="number"
-            min={40}
+            min={30}
             max={960}
             value={Math.round(selectedImage.height)}
-            onChange={(e) =>
+            onChange={(e) => {
+              const ratio = selectedImage.aspectRatio || 1.33;
+              const nextH = Math.max(30, parseInt(e.target.value || '120', 10));
               onUpdateImage({
-                height: Math.max(40, parseInt(e.target.value || '120', 10)),
-              })
-            }
+                height: nextH,
+                width: Math.max(40, Math.round(nextH * ratio)),
+              });
+            }}
             className="ed-input"
             style={{ width: '60px', padding: '3px 5px', fontSize: '11px' }}
+            title="Image Height (preserves aspect ratio)"
           />
         </div>
       )}
+
+      {/* Layer Status Badge */}
+      <span
+        className="mono-label"
+        style={{
+          fontSize: '8.5px',
+          padding: '3px 6px',
+          backgroundColor: 'var(--bg-stone)',
+          border: '1px solid var(--border-stone)',
+          color: 'var(--ink-navy)',
+        }}
+      >
+        {((selectedDrawing?.zIndex ?? selectedImage?.zIndex ?? 12) < 10)
+          ? `Behind Text (Z:${selectedDrawing?.zIndex ?? selectedImage?.zIndex ?? 5})`
+          : `In Front (Z:${selectedDrawing?.zIndex ?? selectedImage?.zIndex ?? 12})`}
+      </span>
 
       {/* Layer Positioning Controls (Bring to Front, Bring Forward, Send Backward, Send to Back) */}
       <div style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
@@ -953,7 +977,7 @@ export const ElementLayerToolbar: React.FC<ElementLayerToolbarProps> = ({
           onClick={() => onLayerAction('front')}
           className="btn-ed-subtle"
           style={{ padding: '4px 7px', fontSize: '9px' }}
-          title="Bring to Front"
+          title="Bring to Front (top of layer stack)"
         >
           <ArrowUpToLine size={11} /> Bring to Front
         </button>
@@ -962,25 +986,25 @@ export const ElementLayerToolbar: React.FC<ElementLayerToolbarProps> = ({
           onClick={() => onLayerAction('forward')}
           className="btn-ed-subtle"
           style={{ padding: '4px 7px', fontSize: '9px' }}
-          title="Bring Forward"
+          title="Bring Forward one step"
         >
-          <ArrowUp size={11} /> Forward
+          <ArrowUp size={11} /> Bring Forward
         </button>
         <button
           type="button"
           onClick={() => onLayerAction('backward')}
           className="btn-ed-subtle"
           style={{ padding: '4px 7px', fontSize: '9px' }}
-          title="Send Backward"
+          title="Send Backward (moves behind the object or text immediately beneath it)"
         >
-          <ArrowDown size={11} /> Backward
+          <ArrowDown size={11} /> Send Backward
         </button>
         <button
           type="button"
           onClick={() => onLayerAction('back')}
           className="btn-ed-subtle"
           style={{ padding: '4px 7px', fontSize: '9px' }}
-          title="Send to Back"
+          title="Send to Back (behind all objects and text)"
         >
           <ArrowDownToLine size={11} /> Send to Back
         </button>
@@ -1010,3 +1034,4 @@ export const ElementLayerToolbar: React.FC<ElementLayerToolbarProps> = ({
     </div>
   );
 };
+

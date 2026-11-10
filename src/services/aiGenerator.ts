@@ -318,16 +318,19 @@ export const INITIAL_DOCUMENTS: DocumentItem[] = [
           id: 'grp-prelim',
           name: 'Group 1: Title & Abstract',
           pageIndices: [0],
+          collapsed: true,
         },
         {
           id: 'grp-ch1',
           name: 'Group 2: Chapter One',
           pageIndices: [1],
+          collapsed: true,
         },
         {
           id: 'grp-ch2',
           name: 'Group 3: Chapter Two',
           pageIndices: [2],
+          collapsed: true,
         },
       ],
     },
@@ -636,23 +639,24 @@ export function generateDocumentFromNaturalPrompt(
       : '';
 
   if (category === 'projects') {
-    const content = `
-      <div style="text-align: center; margin-bottom: 28px;">
-        <p style="font-size: 15pt; font-weight: 700; text-transform: uppercase;">${title}</p>
-        <p style="margin-top: 20px;">BY</p>
-        <p style="font-weight: 700; font-size: 12.5pt; margin-top: 6px;">${student.toUpperCase()}</p>
-        <p style="margin-top: 20px;">A RESEARCH PROJECT SUBMITTED TO THE ${dept.toUpperCase()}, ${inst.toUpperCase()}</p>
-        <p style="margin-top: 12px;">SUPERVISOR: ${lecturer}</p>
-        <p style="margin-top: 16px; font-weight: 700;">NOVEMBER, 2026</p>
+    const page1 = `
+      <div style="text-align: center; margin-bottom: 22px;">
+        <p style="font-size: 14.5pt; font-weight: 700; text-transform: uppercase;">${title}</p>
+        <p style="margin-top: 14px;">BY</p>
+        <p style="font-weight: 700; font-size: 12pt; margin-top: 4px;">${student.toUpperCase()}</p>
+        <p style="margin-top: 14px;">A RESEARCH PROJECT SUBMITTED TO THE ${dept.toUpperCase()}, ${inst.toUpperCase()}</p>
+        <p style="margin-top: 8px;">SUPERVISOR: ${lecturer}</p>
+        <p style="margin-top: 12px; font-weight: 700;">NOVEMBER, 2026</p>
       </div>
       <h1>ABSTRACT</h1>
-      <p>This research project investigates <strong>${title}</strong>. Driven by the user instruction (<em>"${prompt}"</em>), a descriptive cross-sectional survey design was adopted with 350 respondents selected via stratified random sampling. Empirical findings demonstrate a statistically significant relationship between the primary variables under investigation and institutional performance outcomes. Policy and operational recommendations are presented.</p>
-      <hr class="page-break" />
+      <p>This research project investigates <strong>${title}</strong>. Guided by the study objective (<em>"${prompt}"</em>), a descriptive cross-sectional survey design was adopted with 350 respondents selected via stratified random sampling. Empirical findings demonstrate a statistically significant relationship between the primary variables under investigation and institutional performance outcomes. Policy and operational recommendations are presented.</p>
+    `.trim();
+
+    const page2 = `
       <h1>CHAPTER ONE: INTRODUCTION</h1>
       <h2>1.1 Background to the Study</h2>
       <p>Across Nigeria and comparable developing economies, <strong>${title}</strong> has emerged as a critical focus of empirical scholarship and administrative reform. Rapid technological, economic, and institutional transformations within ${inst} and the wider sector have reshaped how stakeholders operate and evaluate outcomes.</p>
-      <p>Understanding the structural and behavioural determinants of this subject is essential to bridge the persistent gap between policy formulation and practical field execution.</p>
-      ${uploadedContextBlock ? `<h2>1.1.1 Context Extracted from Uploaded Reference Materials</h2>${uploadedContextBlock}` : ''}
+      ${uploadedContextBlock ? `<h2>1.1.1 Context from Reference Materials</h2>${uploadedContextBlock}` : ''}
       <h2>1.2 Statement of the Problem</h2>
       <p>Despite ongoing institutional initiatives addressing ${title.toLowerCase()}, empirical gaps remain regarding the specific factors that drive sustainable, measurable improvements in the study area.</p>
       <h2>1.3 Objectives of the Study</h2>
@@ -660,7 +664,6 @@ export function generateDocumentFromNaturalPrompt(
         <li>To examine the current practices and prevalence associated with ${title.toLowerCase()}.</li>
         <li>To identify the key determinants influencing effective implementation among respondents.</li>
         <li>To evaluate the statistically significant impact on overall performance outcomes.</li>
-        <li>To proffer actionable, evidence-based recommendations for stakeholders.</li>
       </ol>
       <h2>1.4 Research Questions</h2>
       <ol>
@@ -668,7 +671,9 @@ export function generateDocumentFromNaturalPrompt(
         <li>What are the principal factors shaping outcomes in the study setting?</li>
         <li>To what extent does ${title.toLowerCase()} significantly affect measurable performance?</li>
       </ol>
-      <hr class="page-break" />
+    `.trim();
+
+    const page3 = `
       <h1>CHAPTER TWO: LITERATURE REVIEW</h1>
       <h2>2.1 Conceptual Framework</h2>
       <p>The conceptual architecture of <strong>${title}</strong> encompasses institutional readiness, operational execution, and long-term sustainability. Contemporary literature emphasizes that these dimensions interact dynamically rather than operating in isolation.</p>
@@ -676,14 +681,14 @@ export function generateDocumentFromNaturalPrompt(
       <p>This study is anchored on <strong>Systems Theory</strong>, which conceptualizes organizations and educational institutions as open, interdependent systems where resource inputs, transformation processes, and environmental feedback loops determine overall effectiveness.</p>
       <h2>2.3 Empirical Review of Related Studies</h2>
       <p>Okonkwo and Ibrahim (2024) surveyed 400 participants across Nigerian tertiary institutions and established a strong positive correlation (r = 0.72, p &lt; 0.05) between structured intervention frameworks and target outcomes. Similarly, Adeyemi (2025) found that institutional support accounts for 61% of variance in program success.</p>
-      <hr class="page-break" />
       <h1>CHAPTER THREE: RESEARCH METHODOLOGY</h1>
-      <h2>3.1 Research Design &amp; Population</h2>
-      <p>A descriptive survey research design was employed. Applying Taro Yamane's (1967) finite population formula at a 5% margin of error, a sample size of 350 respondents was selected through stratified simple random sampling.</p>
-      <h2>3.2 Method of Data Analysis &amp; References (${refStyle})</h2>
-      <p>Primary data collected via a validated 4-point Likert scale questionnaire were analysed using descriptive statistics (mean scores) and Pearson Product-Moment Correlation.</p>
+      <h2>3.1 Research Design &amp; References (${refStyle})</h2>
+      <p>A descriptive survey research design was employed with a sample size of 350 respondents selected via Taro Yamane's (1967) formula at a 5% margin of error.</p>
       <p><strong>References:</strong><br/>Adeyemi, T. O. (2025). Institutional resource allocation and performance metrics in Nigeria. <em>Journal of Management &amp; Policy Research</em>, 19(2), 101–119.<br/>Okonkwo, C. N., &amp; Ibrahim, M. S. (2024). Empirical assessment of operational frameworks in Nigerian tertiary institutions. <em>African Research Review</em>, 18(4), 55–73.</p>
-    `;
+    `.trim();
+
+    const pagesArr = [page1, page2, page3];
+    const content = pagesArr.join('\n<hr class="page-break" />\n');
     return {
       title,
       content,
@@ -698,26 +703,25 @@ export function generateDocumentFromNaturalPrompt(
         orientation: 'portrait',
         marginSize: 'normal',
         fontFamily: 'Times New Roman',
+        pages: pagesArr,
         pageGroups: [
           {
             id: 'grp-1',
             name: 'Group 1: Title & Abstract',
             pageIndices: [0],
+            collapsed: true,
           },
           {
             id: 'grp-2',
             name: 'Group 2: Chapter One',
             pageIndices: [1],
+            collapsed: true,
           },
           {
             id: 'grp-3',
-            name: 'Group 3: Chapter Two',
+            name: 'Group 3: Literature & Methodology',
             pageIndices: [2],
-          },
-          {
-            id: 'grp-4',
-            name: 'Group 4: Methodology & References',
-            pageIndices: [3],
+            collapsed: true,
           },
         ],
       },
@@ -1384,11 +1388,15 @@ export function runWorkspaceAIPrompt(
     };
   }
 
-  // 3. Whole-Document Scope (Applies to the active/last page or across the document)
-  const lastIdx = Math.max(0, currentPages.length - 1);
+  // 3. Whole-Document Scope (Detect if user mentioned a specific page number like "page 2", otherwise target active/first appropriate page)
+  const pageMatch = p.match(/\bpage\s+(\d+)\b/i);
+  const requestedIdx = pageMatch
+    ? Math.max(0, Math.min(currentPages.length - 1, parseInt(pageMatch[1], 10) - 1))
+    : Math.max(0, currentPages.length - 1);
+
   const pageResult = runPageLevelAI(
-    currentPages[lastIdx] || '',
-    lastIdx,
+    currentPages[requestedIdx] || '',
+    requestedIdx,
     prompt,
     doc.title,
     uploadedReferences
@@ -1401,9 +1409,9 @@ export function runWorkspaceAIPrompt(
         : ''
     }`,
     generatedHtml: pageResult.updatedPageHtml,
-    targetPageIndices: [lastIdx],
+    targetPageIndices: [requestedIdx],
     directPageUpdates: {
-      [lastIdx]: pageResult.updatedPageHtml,
+      [requestedIdx]: pageResult.updatedPageHtml,
     },
   };
 }
