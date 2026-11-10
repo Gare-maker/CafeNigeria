@@ -219,6 +219,15 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
   const [exportGroupId, setExportGroupId] = useState<string>('');
   const [exportPageIdx, setExportPageIdx] = useState<number>(0);
 
+  // Requirement: Dedicated Print Scope Menu (Entire Doc, Group, or Page)
+  const [showPrintMenu, setShowPrintMenu] = useState(false);
+  const [printScope, setPrintScope] = useState<'document' | 'group' | 'page'>(
+    'document'
+  );
+  const [printGroupId, setPrintGroupId] = useState<string>('');
+  const [printPageIdx, setPrintPageIdx] = useState<number>(0);
+  const printMenuRef = useRef<HTMLDivElement>(null);
+
   const [showAiPanel, setShowAiPanel] = useState<boolean>(() =>
     typeof window !== 'undefined' ? window.innerWidth > 1024 : true
   );
@@ -368,6 +377,8 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
   const [editingGroupName, setEditingGroupName] = useState('');
 
   // Requirement 11: Unified Undo and Redo History
+  const inputHistoryTimeoutRef = useRef<number | null>(null);
+
   const pushHistory = useCallback(
     (
       newPages: string[],
@@ -383,7 +394,7 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
         images: [...newImages],
         title: newTitle,
       });
-      if (newHistory.length > 50) newHistory.shift();
+      if (newHistory.length > 60) newHistory.shift();
       historyRef.current = newHistory;
       historyIndexRef.current = newHistory.length - 1;
       setCanUndo(historyIndexRef.current > 0);
@@ -393,13 +404,57 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
     [drawings, canvasImages, title]
   );
 
+  const recordHistorySnapshotDebounced = useCallback(() => {
+    if (inputHistoryTimeoutRef.current) {
+      window.clearTimeout(inputHistoryTimeoutRef.current);
+    }
+    inputHistoryTimeoutRef.current = window.setTimeout(() => {
+      const currentPages = pages.map((p, i) =>
+        pageRefs.current[i] ? pageRefs.current[i]!.innerHTML : p
+      );
+      const currentHead = historyRef.current[historyIndexRef.current];
+      if (
+        !currentHead ||
+        JSON.stringify(currentHead.pages) !== JSON.stringify(currentPages)
+      ) {
+        pushHistory(currentPages);
+      }
+    }, 450);
+  }, [pages, pushHistory]);
+
   const handleUndo = useCallback(() => {
+    if (inputHistoryTimeoutRef.current) {
+      window.clearTimeout(inputHistoryTimeoutRef.current);
+      inputHistoryTimeoutRef.current = null;
+    }
+
+    // Flush any uncommitted edits before undoing so the current state isn't lost
+    const currentPages = pages.map((p, i) =>
+      pageRefs.current[i] ? pageRefs.current[i]!.innerHTML : p
+    );
+    const head = historyRef.current[historyIndexRef.current];
+    if (
+      head &&
+      JSON.stringify(head.pages) !== JSON.stringify(currentPages)
+    ) {
+      const nextIndex = historyIndexRef.current + 1;
+      const newHistory = historyRef.current.slice(0, nextIndex);
+      newHistory.push({
+        pages: [...currentPages],
+        drawings: [...drawings],
+        images: [...canvasImages],
+        title,
+      });
+      historyRef.current = newHistory;
+      historyIndexRef.current = newHistory.length - 1;
+    }
+
     if (historyIndexRef.current > 0) {
       historyIndexRef.current -= 1;
       const snapshot = historyRef.current[historyIndexRef.current];
-      setPages(snapshot.pages);
-      setDrawings(snapshot.drawings);
-      setCanvasImages(snapshot.images);
+      setPages([...snapshot.pages]);
+      setDrawings([...snapshot.drawings]);
+      setCanvasImages([...snapshot.images]);
       setTitle(snapshot.title);
       snapshot.pages.forEach((html, i) => {
         if (pageRefs.current[i]) {
@@ -409,16 +464,20 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
       setCanUndo(historyIndexRef.current > 0);
       setCanRedo(true);
       setHasUnsavedChanges(true);
+    } else {
+      try {
+        window.document.execCommand('undo');
+      } catch {}
     }
-  }, []);
+  }, [pages, drawings, canvasImages, title]);
 
   const handleRedo = useCallback(() => {
     if (historyIndexRef.current < historyRef.current.length - 1) {
       historyIndexRef.current += 1;
       const snapshot = historyRef.current[historyIndexRef.current];
-      setPages(snapshot.pages);
-      setDrawings(snapshot.drawings);
-      setCanvasImages(snapshot.images);
+      setPages([...snapshot.pages]);
+      setDrawings([...snapshot.drawings]);
+      setCanvasImages([...snapshot.images]);
       setTitle(snapshot.title);
       snapshot.pages.forEach((html, i) => {
         if (pageRefs.current[i]) {
@@ -428,6 +487,10 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
       setCanUndo(true);
       setCanRedo(historyIndexRef.current < historyRef.current.length - 1);
       setHasUnsavedChanges(true);
+    } else {
+      try {
+        window.document.execCommand('redo');
+      } catch {}
     }
   }, []);
 
@@ -467,7 +530,73 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
     setCanRedo(false);
   }, [doc.id]);
 
-  // Requirement 3: Automatically hide AI icon as soon as text is deselected anywhere
+  // Global Selection Detection ensuring the AI icon reliably shows whenever text is highlighted
+  const checkAndUpdateTextSelection = useCallback(() => {
+    const sel = window.getSelection();
+    if (!sel || sel.rangeCount === 0 || sel.isCollapsed) {
+      if (!showTextAiPopup) {
+        setHighlightedText('');
+        setHighlightBadgePos(null);
+      }
+      return;
+    }
+
+    const text = sel.toString().trim();
+    if (!text) {
+      if (!showTextAiPopup) {
+        setHighlightedText('');
+        setHighlightBadgePos(null);
+      }
+      return;
+    }
+
+    const range = sel.getRangeAt(0);
+    const pageIdx = pageRefs.current.findIndex(
+      (el) => el && el.contains(range.commonAncestorContainer)
+    );
+    if (pageIdx === -1) {
+      return;
+    }
+
+    savedRangeRef.current = range.cloneRange();
+    activePageIdxRef.current = pageIdx;
+
+    let rect = range.getBoundingClientRect();
+    if (
+      (!rect || (rect.width === 0 && rect.height === 0)) &&
+      range.getClientRects().length > 0
+    ) {
+      rect = range.getClientRects()[0];
+    }
+
+    if (rect && (rect.width > 0 || rect.height > 0 || rect.top > 0)) {
+      setHighlightedText(text);
+      setHighlightPageIdx(pageIdx);
+      setHighlightBadgePos({
+        top: rect.top,
+        left: rect.right,
+      });
+    }
+  }, [showTextAiPopup]);
+
+  useEffect(() => {
+    const handleGlobalMouseUp = () => {
+      setTimeout(checkAndUpdateTextSelection, 20);
+    };
+    const handleGlobalKeyUp = (e: KeyboardEvent) => {
+      if (e.key.startsWith('Arrow') || e.key === 'Shift') {
+        setTimeout(checkAndUpdateTextSelection, 20);
+      }
+    };
+    window.document.addEventListener('mouseup', handleGlobalMouseUp);
+    window.document.addEventListener('keyup', handleGlobalKeyUp);
+    return () => {
+      window.document.removeEventListener('mouseup', handleGlobalMouseUp);
+      window.document.removeEventListener('keyup', handleGlobalKeyUp);
+    };
+  }, [checkAndUpdateTextSelection]);
+
+  // Automatically hide AI icon as soon as text is deselected anywhere
   useEffect(() => {
     const handleSelectionChange = () => {
       const sel = window.getSelection();
@@ -484,17 +613,26 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
     };
   }, [showTextAiPopup]);
 
-  // Requirement 4 & 11: Keyboard shortcuts (Ctrl+Z, Ctrl+Y, Ctrl+Q)
+  // Keyboard shortcuts (Ctrl+Z, Ctrl+Y, Ctrl+Q)
   useEffect(() => {
     const handleGlobalShortcuts = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement;
+      if (
+        target &&
+        (target.tagName === 'INPUT' ||
+          target.tagName === 'TEXTAREA' ||
+          (target as any).isContentEditable === false)
+      ) {
+        return;
+      }
+
       const isCtrl = e.ctrlKey || e.metaKey;
       if (isCtrl) {
         if (e.key === 'z' || e.key === 'Z') {
+          e.preventDefault();
           if (e.shiftKey) {
-            e.preventDefault();
             handleRedo();
           } else {
-            e.preventDefault();
             handleUndo();
           }
         } else if (e.key === 'y' || e.key === 'Y') {
@@ -582,6 +720,12 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
         !exportMenuRef.current.contains(target as Node)
       ) {
         setShowExportMenu(false);
+      }
+      if (
+        printMenuRef.current &&
+        !printMenuRef.current.contains(target as Node)
+      ) {
+        setShowPrintMenu(false);
       }
       if (!target.closest('.nc-image-dropdown-btn') && !target.closest('.nc-image-dropdown-menu')) {
         setImageMenuPos(null);
@@ -1021,7 +1165,36 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
     applyInlineStyleToSelection('font-family', `"${family}", Georgia, serif`);
   };
 
-  const handlePrintWorkspace = () => {
+  const handlePrintWorkspace = (
+    scope: 'document' | 'group' | 'page' = printScope,
+    groupId: string = printGroupId,
+    pageIndex: number = printPageIdx
+  ) => {
+    setShowPrintMenu(false);
+
+    // Determine target page indices to print
+    let targetIndices: number[] = [];
+    if (scope === 'document') {
+      targetIndices = pages.map((_, i) => i);
+    } else if (scope === 'group') {
+      const activeGrp =
+        pageGroups.find((g) => g.id === groupId) || pageGroups[0];
+      targetIndices = activeGrp ? activeGrp.pageIndices : [0];
+    } else {
+      targetIndices = [Math.max(0, Math.min(pages.length - 1, pageIndex))];
+    }
+
+    // Mark pages with data-print-visible attribute
+    pages.forEach((_, i) => {
+      const pageEl = pageRefs.current[i]?.closest('.doc-a4-page') as HTMLElement | null;
+      if (pageEl) {
+        pageEl.setAttribute(
+          'data-print-visible',
+          targetIndices.includes(i) ? 'true' : 'false'
+        );
+      }
+    });
+
     const orientation = layout.orientation || 'portrait';
     const pageSizeName =
       layout.pageSize === 'Custom'
@@ -1055,6 +1228,7 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
         .ed-toolbar,
         .nc-modal-backdrop,
         .nc-element-layer-toolbar,
+        .nc-image-dropdown-menu,
         mark.ai-persistent-selection {
           display: none !important;
         }
@@ -1065,6 +1239,10 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
           overflow: visible !important;
         }
         .doc-a4-page {
+          display: none !important;
+        }
+        .doc-a4-page[data-print-visible="true"] {
+          display: flex !important;
           margin: 0 auto !important;
           box-shadow: none !important;
           border: none !important;
@@ -1074,7 +1252,9 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
       }
     `;
 
-    window.print();
+    setTimeout(() => {
+      window.print();
+    }, 60);
   };
 
   const execFormat = (command: string, value?: string) => {
@@ -2852,16 +3032,169 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
             )}
           </div>
 
-          {/* Requirement: Dedicated Workspace Print with Landscape Support */}
-          <button
-            onClick={handlePrintWorkspace}
-            className="btn-ed-outline"
-            style={{ height: '32px', padding: '0 10px', fontSize: '10px' }}
-            title="Print document (with true landscape/portrait orientation)"
-          >
-            <Printer size={13} color="var(--accent-blue)" />
-            <span className="hide-on-mobile">Print</span>
-          </button>
+          {/* Requirement: Dedicated Workspace Print with Scope Selection (Entire Doc, Group, or Page) */}
+          <div ref={printMenuRef} style={{ position: 'relative' }}>
+            <button
+              onClick={() => setShowPrintMenu((prev) => !prev)}
+              className="btn-ed-outline"
+              style={{
+                height: '32px',
+                padding: '0 10px',
+                fontSize: '10px',
+                backgroundColor: showPrintMenu ? 'var(--bg-stone)' : 'transparent',
+              }}
+              title="Print document with scope selection"
+            >
+              <Printer size={13} color="var(--accent-blue)" />
+              <span className="hide-on-mobile">Print</span>
+              <ChevronDown size={11} />
+            </button>
+
+            {showPrintMenu && (
+              <div
+                style={{
+                  position: 'fixed',
+                  top: '52px',
+                  right: '96px',
+                  width: '240px',
+                  backgroundColor: 'var(--bg-ivory)',
+                  border: '1px solid var(--border-stone)',
+                  boxShadow: '0 10px 28px rgba(10, 25, 78, 0.18)',
+                  zIndex: 250,
+                  padding: '12px',
+                }}
+              >
+                <div
+                  className="mono-label"
+                  style={{
+                    fontSize: '9px',
+                    marginBottom: '6px',
+                    color: 'var(--ink-muted)',
+                  }}
+                >
+                  1. Print Scope
+                </div>
+                <div style={{ display: 'flex', gap: '4px', marginBottom: '8px' }}>
+                  <button
+                    type="button"
+                    onClick={() => setPrintScope('document')}
+                    className={
+                      printScope === 'document'
+                        ? 'btn-ed-primary'
+                        : 'btn-ed-subtle'
+                    }
+                    style={{ flex: 1, padding: '4px 6px', fontSize: '9px' }}
+                  >
+                    Entire Doc
+                  </button>
+                  {pageGroups.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setPrintScope('group');
+                        if (!printGroupId && pageGroups[0]) {
+                          setPrintGroupId(pageGroups[0].id);
+                        }
+                      }}
+                      className={
+                        printScope === 'group'
+                          ? 'btn-ed-primary'
+                          : 'btn-ed-subtle'
+                      }
+                      style={{ flex: 1, padding: '4px 6px', fontSize: '9px' }}
+                    >
+                      Group
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => setPrintScope('page')}
+                    className={
+                      printScope === 'page' ? 'btn-ed-primary' : 'btn-ed-subtle'
+                    }
+                    style={{ flex: 1, padding: '4px 6px', fontSize: '9px' }}
+                  >
+                    Page
+                  </button>
+                </div>
+
+                {printScope === 'group' && pageGroups.length > 0 && (
+                  <select
+                    value={printGroupId || pageGroups[0]?.id}
+                    onChange={(e) => setPrintGroupId(e.target.value)}
+                    className="ed-select"
+                    style={{
+                      padding: '4px 6px',
+                      fontSize: '11px',
+                      marginBottom: '8px',
+                      width: '100%',
+                    }}
+                  >
+                    {pageGroups.map((g) => (
+                      <option key={g.id} value={g.id}>
+                        {g.name}
+                      </option>
+                    ))}
+                  </select>
+                )}
+
+                {printScope === 'page' && (
+                  <select
+                    value={printPageIdx}
+                    onChange={(e) =>
+                      setPrintPageIdx(parseInt(e.target.value, 10))
+                    }
+                    className="ed-select"
+                    style={{
+                      padding: '4px 6px',
+                      fontSize: '11px',
+                      marginBottom: '8px',
+                      width: '100%',
+                    }}
+                  >
+                    {pages.map((_, i) => (
+                      <option key={i} value={i}>
+                        Page {i + 1}
+                      </option>
+                    ))}
+                  </select>
+                )}
+
+                <div
+                  className="mono-label"
+                  style={{
+                    fontSize: '9px',
+                    marginBottom: '8px',
+                    color: 'var(--ink-muted)',
+                  }}
+                >
+                  Layout: {layout.orientation === 'landscape' ? 'Landscape' : 'Portrait'} ({layout.pageSize})
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => handlePrintWorkspace()}
+                  className="btn-ed-primary"
+                  style={{
+                    width: '100%',
+                    justifyContent: 'center',
+                    padding: '7px 10px',
+                    fontSize: '11px',
+                    gap: '6px',
+                  }}
+                >
+                  <Printer size={13} />
+                  <span>
+                    {printScope === 'page'
+                      ? `Print Page ${printPageIdx + 1}`
+                      : printScope === 'group'
+                      ? 'Print Selected Group'
+                      : 'Print Entire Document'}
+                  </span>
+                </button>
+              </div>
+            )}
+          </div>
 
           <button
             onClick={() => setShowAiPanel((p) => !p)}
@@ -2926,44 +3259,54 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
           <option value="H3">Heading 3</option>
         </select>
 
-        <div style={{ display: 'inline-flex', alignItems: 'center' }}>
-          <input
-            type="text"
-            list="nc-font-size-datalist"
-            value={selectedFontSize}
-            onChange={(e) => setSelectedFontSize(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') {
-                e.preventDefault();
-                handleApplyFontSize(selectedFontSize);
-              }
-            }}
-            onBlur={() => handleApplyFontSize(selectedFontSize)}
-            className="ed-input"
-            style={{
-              width: '62px',
-              padding: '4px 5px',
-              fontSize: '12px',
-              textAlign: 'center',
-              height: '28px',
-            }}
-            title="Font size (e.g. 10px, 12px, 14px, 16px, 18px, 24px) - select or type"
-          />
-          <datalist id="nc-font-size-datalist">
-            <option value="10px" />
-            <option value="11px" />
-            <option value="12px" />
-            <option value="13px" />
-            <option value="14px" />
-            <option value="16px" />
-            <option value="18px" />
-            <option value="20px" />
-            <option value="24px" />
-            <option value="28px" />
-            <option value="32px" />
-            <option value="36px" />
-          </datalist>
-        </div>
+        <select
+          value={selectedFontSize}
+          onMouseDown={() => {
+            const sel = window.getSelection();
+            if (sel && sel.rangeCount > 0 && !sel.isCollapsed) {
+              savedRangeRef.current = sel.getRangeAt(0).cloneRange();
+            }
+          }}
+          onChange={(e) => handleApplyFontSize(e.target.value)}
+          className="ed-select"
+          style={{ width: '74px', padding: '4px 6px', fontSize: '12px' }}
+          title="Font Size"
+        >
+          {![
+            '9px',
+            '10px',
+            '11px',
+            '12px',
+            '13px',
+            '14px',
+            '16px',
+            '18px',
+            '20px',
+            '22px',
+            '24px',
+            '28px',
+            '32px',
+            '36px',
+            '48px',
+          ].includes(selectedFontSize) && (
+            <option value={selectedFontSize}>{selectedFontSize}</option>
+          )}
+          <option value="9px">9 px</option>
+          <option value="10px">10 px</option>
+          <option value="11px">11 px</option>
+          <option value="12px">12 px</option>
+          <option value="13px">13 px</option>
+          <option value="14px">14 px</option>
+          <option value="16px">16 px</option>
+          <option value="18px">18 px</option>
+          <option value="20px">20 px</option>
+          <option value="22px">22 px</option>
+          <option value="24px">24 px</option>
+          <option value="28px">28 px</option>
+          <option value="32px">32 px</option>
+          <option value="36px">36 px</option>
+          <option value="48px">48 px</option>
+        </select>
 
         <button
           onMouseDown={(e) => e.preventDefault()}
@@ -4036,6 +4379,7 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
               <div
                 key={pageIdx}
                 className="doc-a4-page"
+                data-page-index={pageIdx}
                 onClick={(e) => {
                   const target = e.target as HTMLElement;
                   if (
@@ -4306,7 +4650,10 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
                     setSelectedImageId(null);
                     setIsEditingShape(false);
                   }}
-                  onInput={() => checkAndFlowPages(pageIdx)}
+                  onInput={() => {
+                    checkAndFlowPages(pageIdx);
+                    recordHistorySnapshotDebounced();
+                  }}
                   onKeyDown={(e) => {
                     if (e.key === 'Backspace') {
                       const sel = window.getSelection();

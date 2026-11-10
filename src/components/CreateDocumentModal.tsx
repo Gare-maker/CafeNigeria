@@ -58,10 +58,15 @@ export const CreateDocumentModal: React.FC<CreateDocumentModalProps> = ({
   const [creationMethod, setCreationMethod] = useState<'ai' | 'manual'>('ai');
   const [manualTitle, setManualTitle] = useState('');
 
-  // Requirement 6: Add Layout Settings to Document Creation Process
+  // Requirement: Use default layout should always be the default when creating a new file or opening existing document
   const [layoutOption, setLayoutOption] = useState<'default' | 'custom'>('default');
   const [customLayout, setCustomLayout] = useState<PageLayoutSettings>(DEFAULT_PAGE_LAYOUT);
   const [showLayoutModal, setShowLayoutModal] = useState(false);
+
+  useEffect(() => {
+    setLayoutOption('default');
+    setCustomLayout(DEFAULT_PAGE_LAYOUT);
+  }, [category, workflowMode]);
 
   const [selectedExistingDocId, setSelectedExistingDocId] = useState<string>(
     () => {
@@ -335,8 +340,22 @@ export const CreateDocumentModal: React.FC<CreateDocumentModalProps> = ({
 
   const handleOpenExistingWithoutAI = () => {
     if (!selectedExistingDoc) return;
+    const chosenLayout =
+      layoutOption === 'custom' ? customLayout : DEFAULT_PAGE_LAYOUT;
+
     if (preserveMode === 'overwrite' && !importedComputerDoc) {
-      onDocumentCreated(selectedExistingDoc, true);
+      onDocumentCreated(
+        {
+          ...selectedExistingDoc,
+          metadata: {
+            ...selectedExistingDoc.metadata,
+            layout: chosenLayout,
+            orientation: chosenLayout.orientation,
+            marginSize: chosenLayout.marginPreset,
+          },
+        },
+        true
+      );
     } else {
       const todayFormatted = getCurrentFormattedDate();
       const workingCopy: DocumentItem = {
@@ -349,6 +368,12 @@ export const CreateDocumentModal: React.FC<CreateDocumentModalProps> = ({
         updatedAt: todayFormatted,
         status: 'Draft',
         syncStatus: isOnline ? 'saved' : 'offline-pending',
+        metadata: {
+          ...selectedExistingDoc.metadata,
+          layout: chosenLayout,
+          orientation: chosenLayout.orientation,
+          marginSize: chosenLayout.marginPreset,
+        },
       };
       onDocumentCreated(workingCopy, false);
     }
@@ -372,6 +397,8 @@ export const CreateDocumentModal: React.FC<CreateDocumentModalProps> = ({
     setIsGenerating(true);
     setTimeout(() => {
       const todayFormatted = getCurrentFormattedDate();
+      const chosenLayout =
+        layoutOption === 'custom' ? customLayout : DEFAULT_PAGE_LAYOUT;
 
       // Option B: Continue with an Existing Document (Requirement 15 & 17)
       if (workflowMode === 'existing' && selectedExistingDoc) {
@@ -387,6 +414,12 @@ export const CreateDocumentModal: React.FC<CreateDocumentModalProps> = ({
             content: updatedResult.content,
             updatedAt: todayFormatted,
             syncStatus: isOnline ? 'saved' : 'offline-pending',
+            metadata: {
+              ...selectedExistingDoc.metadata,
+              layout: chosenLayout,
+              orientation: chosenLayout.orientation,
+              marginSize: chosenLayout.marginPreset,
+            },
           };
           setIsGenerating(false);
           onDocumentCreated(updatedExisting, true);
@@ -404,6 +437,12 @@ export const CreateDocumentModal: React.FC<CreateDocumentModalProps> = ({
             updatedAt: todayFormatted,
             status: 'Draft',
             syncStatus: isOnline ? 'saved' : 'offline-pending',
+            metadata: {
+              ...selectedExistingDoc.metadata,
+              layout: chosenLayout,
+              orientation: chosenLayout.orientation,
+              marginSize: chosenLayout.marginPreset,
+            },
           };
           setIsGenerating(false);
           onDocumentCreated(workingCopy, false);
@@ -426,9 +465,6 @@ export const CreateDocumentModal: React.FC<CreateDocumentModalProps> = ({
           wordCount: wordCount.trim() || undefined,
         }
       );
-
-      const chosenLayout =
-        layoutOption === 'custom' ? customLayout : DEFAULT_PAGE_LAYOUT;
 
       const newDoc: DocumentItem = {
         id: `doc-${Date.now()}`,

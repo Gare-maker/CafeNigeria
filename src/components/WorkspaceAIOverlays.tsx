@@ -496,11 +496,16 @@ export const PageLevelAIPopover: React.FC<PageLevelAIPopoverProps> = ({
       className="no-print"
       onMouseDown={(e) => e.stopPropagation()}
       style={{
-        marginBottom: '14px',
-        padding: '12px 14px',
-        backgroundColor: '#F8FAFC',
-        border: '1px solid #1447E6',
-        boxShadow: '0 6px 20px rgba(20, 71, 230, 0.12)',
+        position: 'absolute',
+        top: '44px',
+        right: '18px',
+        width: '430px',
+        maxWidth: 'calc(100% - 36px)',
+        zIndex: 120,
+        padding: '14px 16px',
+        backgroundColor: 'var(--bg-ivory, #FFFFFF)',
+        border: '1.5px solid var(--accent-blue, #1447E6)',
+        boxShadow: '0 16px 40px rgba(10, 25, 78, 0.24)',
         fontFamily: 'var(--font-sans)',
       }}
     >

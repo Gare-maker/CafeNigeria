@@ -591,6 +591,9 @@ mark.ai-persistent-selection {
     margin: 0 !important;
     overflow: visible !important;
   }
+  .doc-a4-page[data-print-visible="false"] {
+    display: none !important;
+  }
   .doc-a4-page {
     border: none !important;
     box-shadow: none !important;
