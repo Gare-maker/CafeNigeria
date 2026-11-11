@@ -10,6 +10,7 @@ import {
   X,
   HardDriveDownload,
   HardDriveUpload,
+  AlertTriangle,
 } from 'lucide-react';
 import { DocumentCategory, DocumentItem } from '../types';
 import {
@@ -72,6 +73,7 @@ export const CategoryPageView: React.FC<CategoryPageViewProps> = ({
 }) => {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editingTitle, setEditingTitle] = useState('');
+  const [docToDelete, setDocToDelete] = useState<DocumentItem | null>(null);
 
   const pageCopy = CATEGORY_PAGE_COPY[category];
 
@@ -501,13 +503,13 @@ export const CategoryPageView: React.FC<CategoryPageViewProps> = ({
                           <Copy size={12} />
                         </button>
                         <button
-                          onClick={() => onDeleteDocument(doc.id)}
+                          onClick={() => setDocToDelete(doc)}
                           className="btn-ed-subtle"
                           style={{
                             padding: '5px 7px',
                             color: 'var(--accent-terracotta)',
                           }}
-                          title="Delete"
+                          title="Delete File"
                         >
                           <Trash2 size={12} />
                         </button>
@@ -632,7 +634,7 @@ export const CategoryPageView: React.FC<CategoryPageViewProps> = ({
                           Duplicate
                         </button>
                         <button
-                          onClick={() => onDeleteDocument(doc.id)}
+                          onClick={() => setDocToDelete(doc)}
                           className="btn-ed-subtle"
                           style={{ color: 'var(--accent-terracotta)' }}
                         >
@@ -647,6 +649,134 @@ export const CategoryPageView: React.FC<CategoryPageViewProps> = ({
           )}
         </div>
       </div>
+
+      {/* Delete File Confirmation Modal */}
+      {docToDelete && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="delete-dialog-title"
+          style={{
+            position: 'fixed',
+            inset: 0,
+            backgroundColor: 'rgba(10, 25, 78, 0.45)',
+            backdropFilter: 'blur(3px)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 1000,
+            padding: '16px',
+          }}
+          onClick={() => setDocToDelete(null)}
+        >
+          <div
+            style={{
+              backgroundColor: 'var(--bg-white)',
+              border: '2px solid var(--border-ivory)',
+              maxWidth: '460px',
+              width: '100%',
+              padding: '24px',
+              boxShadow: '0 20px 45px -10px rgba(0, 0, 0, 0.3)',
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '12px',
+                marginBottom: '14px',
+              }}
+            >
+              <div
+                style={{
+                  width: '38px',
+                  height: '38px',
+                  borderRadius: '50%',
+                  backgroundColor: 'rgba(194, 65, 12, 0.12)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  color: 'var(--accent-terracotta)',
+                  flexShrink: 0,
+                }}
+              >
+                <AlertTriangle size={20} />
+              </div>
+              <div>
+                <h3
+                  id="delete-dialog-title"
+                  style={{
+                    margin: 0,
+                    fontSize: '16px',
+                    fontWeight: 700,
+                    color: 'var(--ink-navy)',
+                  }}
+                >
+                  Delete File
+                </h3>
+                <span
+                  className="mono-label"
+                  style={{ fontSize: '9px', color: 'var(--ink-muted)' }}
+                >
+                  Action Cannot Be Undone
+                </span>
+              </div>
+            </div>
+
+            <p
+              style={{
+                fontSize: '13.5px',
+                color: 'var(--ink-body)',
+                lineHeight: 1.55,
+                margin: '0 0 20px',
+              }}
+            >
+              Are you sure you want to delete{' '}
+              <strong style={{ color: 'var(--ink-navy)' }}>
+                &ldquo;{docToDelete.title}&rdquo;
+              </strong>
+              ? This will permanently remove the document from your library and
+              delete any associated autosaved copies.
+            </p>
+
+            <div
+              style={{
+                display: 'flex',
+                justifyContent: 'flex-end',
+                gap: '10px',
+              }}
+            >
+              <button
+                type="button"
+                onClick={() => setDocToDelete(null)}
+                className="btn-ed-subtle"
+                style={{ padding: '8px 16px', fontSize: '12px' }}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  onDeleteDocument(docToDelete.id);
+                  setDocToDelete(null);
+                }}
+                className="btn-ed-primary"
+                style={{
+                  backgroundColor: 'var(--accent-terracotta)',
+                  borderColor: 'var(--accent-terracotta)',
+                  color: '#FFFFFF',
+                  padding: '8px 18px',
+                  fontSize: '12px',
+                  fontWeight: 600,
+                }}
+              >
+                Delete File
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

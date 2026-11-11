@@ -38,8 +38,9 @@ export interface PageLayoutSettings {
   marginBottomMm: number;
   marginLeftMm: number;
   marginRightMm: number;
-  columns: 1 | 2 | 3;
+  columns: number; // 1 to 6
   columnGapPx: number;
+  lineSpacing?: string; // e.g. '1.15', '1.5', '2.0', '1.0'
   pageBackground: string;
   borderStyle: 'none' | 'solid' | 'double' | 'dashed';
   borderWidthPx: number;
@@ -47,6 +48,7 @@ export interface PageLayoutSettings {
   headerSpacingPx: number;
   footerSpacingPx: number;
   sectionOrientations?: Record<number, 'portrait' | 'landscape'>;
+  sectionColumns?: Record<number, number>;
 }
 
 export const DEFAULT_PAGE_LAYOUT: PageLayoutSettings = {
@@ -61,6 +63,7 @@ export const DEFAULT_PAGE_LAYOUT: PageLayoutSettings = {
   marginRightMm: 25,
   columns: 1,
   columnGapPx: 28,
+  lineSpacing: '1.5',
   pageBackground: '#FFFFFF',
   borderStyle: 'none',
   borderWidthPx: 1,
@@ -68,6 +71,7 @@ export const DEFAULT_PAGE_LAYOUT: PageLayoutSettings = {
   headerSpacingPx: 18,
   footerSpacingPx: 24,
   sectionOrientations: {},
+  sectionColumns: {},
 };
 
 export const PAGE_DIMENSIONS_PX: Record<
@@ -148,7 +152,9 @@ export interface DocumentItem {
     courseCode?: string;
     studentName?: string;
     matricNumber?: string;
+    matricNo?: string;
     lecturerOrSupervisor?: string;
+    submissionDate?: string;
     academicSession?: string;
     referencingStyle?: string;
     wordCountTarget?: string;

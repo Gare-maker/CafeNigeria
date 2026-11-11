@@ -21,12 +21,135 @@
   --bg-ivory: #071135;
   --bg-stone: #0A1747;
   --bg-stone-dark: #0E1F5C;
+  --bg-navy: #040A21;
+  --bg-navy-deep: #020614;
   --ink-navy: #FBF9F5;
   --ink-body: #DCE3F7;
   --ink-muted: #9BA7CA;
   --ink-faint: #6E7B9E;
   --border-ivory: rgba(255, 255, 255, 0.12);
   --border-stone: rgba(255, 255, 255, 0.16);
+  --accent-blue: #3B82F6;
+  --accent-blue-hover: #2563EB;
+}
+
+/* ============================================================================
+   COMPLETE DARK MODE IMPLEMENTATION
+   Workspace, Canvas, Sheet, Dropdowns, Modals, Overlays, and Toolbars
+   ============================================================================ */
+
+[data-theme="dark"] html,
+[data-theme="dark"] body {
+  background-color: var(--bg-ivory);
+  color: var(--ink-navy);
+}
+
+[data-theme="dark"] .doc-workspace-canvas-wrap {
+  background-color: #03081A !important;
+}
+
+[data-theme="dark"] .doc-a4-page {
+  background-color: #0B173E !important;
+  color: #E2E8F0 !important;
+  border-color: rgba(255, 255, 255, 0.14) !important;
+  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.5) !important;
+}
+
+[data-theme="dark"] .doc-editable-body {
+  color: #E2E8F0 !important;
+}
+
+[data-theme="dark"] .doc-editable-body h1 {
+  color: #93C5FD !important;
+}
+
+[data-theme="dark"] .doc-editable-body h2 {
+  color: #BFDBFE !important;
+}
+
+[data-theme="dark"] .doc-editable-body h3 {
+  color: #DBEAFE !important;
+}
+
+[data-theme="dark"] .doc-editable-body table th {
+  background-color: #0E1F5C !important;
+  color: #F8FAFC !important;
+  border-color: #334155 !important;
+}
+
+[data-theme="dark"] .doc-editable-body table td {
+  border-color: #334155 !important;
+  color: #CBD5E1 !important;
+}
+
+[data-theme="dark"] .nc-modal-dialog,
+[data-theme="dark"] [role="dialog"] > div {
+  background-color: #071135 !important;
+  border-color: rgba(255, 255, 255, 0.18) !important;
+  color: #FBF9F5 !important;
+}
+
+[data-theme="dark"] .nc-modal-backdrop {
+  background-color: rgba(2, 6, 20, 0.72) !important;
+}
+
+[data-theme="dark"] .nc-ai-panel,
+[data-theme="dark"] .nc-groups-sidebar {
+  background-color: #071135 !important;
+  border-color: rgba(255, 255, 255, 0.12) !important;
+}
+
+[data-theme="dark"] .nc-category-card {
+  background-color: #071135 !important;
+  border-color: rgba(255, 255, 255, 0.12) !important;
+}
+
+[data-theme="dark"] .nc-category-card:hover {
+  background-color: #0A1747 !important;
+  border-color: rgba(255, 255, 255, 0.22) !important;
+}
+
+[data-theme="dark"] .nc-doc-table-desktop {
+  background-color: #071135 !important;
+  border-color: rgba(255, 255, 255, 0.12) !important;
+}
+
+[data-theme="dark"] .ed-input,
+[data-theme="dark"] .ed-select,
+[data-theme="dark"] .ed-textarea,
+[data-theme="dark"] input[type="text"],
+[data-theme="dark"] input[type="number"],
+[data-theme="dark"] select,
+[data-theme="dark"] textarea {
+  background-color: #0A1747 !important;
+  border-color: rgba(255, 255, 255, 0.18) !important;
+  color: #FBF9F5 !important;
+}
+
+[data-theme="dark"] .btn-ed-outline {
+  border-color: rgba(255, 255, 255, 0.22) !important;
+  color: #DCE3F7 !important;
+}
+
+[data-theme="dark"] .btn-ed-outline:hover:not(:disabled) {
+  background-color: rgba(255, 255, 255, 0.08) !important;
+  border-color: rgba(255, 255, 255, 0.35) !important;
+}
+
+[data-theme="dark"] .btn-ed-subtle {
+  color: #DCE3F7 !important;
+}
+
+[data-theme="dark"] .btn-ed-subtle:hover:not(:disabled) {
+  background-color: rgba(255, 255, 255, 0.08) !important;
+}
+
+[data-theme="dark"] .nc-element-layer-toolbar,
+[data-theme="dark"] .canvas-image-toolbar {
+  background-color: #071135 !important;
+  border-color: rgba(255, 255, 255, 0.18) !important;
+  color: #FBF9F5 !important;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45) !important;
 }
 
 * {
@@ -334,12 +457,17 @@ button, input, select, textarea {
   font-weight: 600;
 }
 
-/* Persistent AI Highlighted Selection Marker inside Document */
+/* Persistent AI Highlighted Selection Marker inside Document - 0px layout shift guarantee */
 mark.ai-persistent-selection {
-  background-color: rgba(20, 71, 230, 0.16);
-  border-bottom: 2px solid #1447E6;
-  color: inherit;
-  padding: 1px 0;
+  background-color: rgba(20, 71, 230, 0.2) !important;
+  color: inherit !important;
+  padding: 0 !important;
+  margin: 0 !important;
+  border: none !important;
+  box-shadow: 0 1px 0 0 #1447E6 !important;
+  line-height: inherit !important;
+  vertical-align: baseline !important;
+  display: inline !important;
 }
 
 /* Creation & Page Layout Modal Responsive Container */
@@ -576,9 +704,14 @@ mark.ai-persistent-selection {
   .ed-toolbar,
   .nc-modal-backdrop,
   .nc-element-layer-toolbar,
-  .canvas-image-toolbar,
-  mark.ai-persistent-selection {
+  .canvas-image-toolbar {
     display: none !important;
+  }
+  mark.ai-persistent-selection {
+    background: transparent !important;
+    color: inherit !important;
+    border: none !important;
+    box-shadow: none !important;
   }
   html, body {
     margin: 0 !important;

@@ -990,7 +990,7 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
     }
   };
 
-  // Requirement 1: Open Text AI popup and keep the text visibly highlighted
+  // Open Text AI popup and keep the text visibly highlighted without shifting/jumping
   const handleOpenTextAiPopup = () => {
     if (savedRangeRef.current && highlightedText) {
       try {
@@ -998,14 +998,16 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
         mark.className = 'ai-persistent-selection';
         savedRangeRef.current.surroundContents(mark);
       } catch {
-        try {
-          const extracted = savedRangeRef.current.extractContents();
-          const mark = window.document.createElement('mark');
-          mark.className = 'ai-persistent-selection';
-          mark.appendChild(extracted);
-          savedRangeRef.current.insertNode(mark);
-        } catch {
-          // partial tag selection handles via savedRangeRef
+        // Multi-node or partially-selected block range: avoid extractContents() which mutates DOM layout
+        // Re-applying the selection directly preserves the user's highlighted text with zero layout disruption
+        const sel = window.getSelection();
+        if (sel && savedRangeRef.current) {
+          try {
+            sel.removeAllRanges();
+            sel.addRange(savedRangeRef.current);
+          } catch {
+            // selection range preserved in savedRangeRef
+          }
         }
       }
     }
@@ -1228,9 +1230,14 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
         .ed-toolbar,
         .nc-modal-backdrop,
         .nc-element-layer-toolbar,
-        .nc-image-dropdown-menu,
-        mark.ai-persistent-selection {
+        .nc-image-dropdown-menu {
           display: none !important;
+        }
+        mark.ai-persistent-selection {
+          background: transparent !important;
+          color: inherit !important;
+          border: none !important;
+          box-shadow: none !important;
         }
         .doc-workspace-canvas-wrap {
           background: #FFFFFF !important;
@@ -4707,9 +4714,13 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
                     position: 'relative',
                     zIndex: 6,
                     background: 'transparent',
-                    lineHeight: lineSpacing,
-                    columnCount: layout.columns,
-                    columnGap: `${layout.columnGapPx}px`,
+                    lineHeight: layout.lineSpacing || lineSpacing || '1.6',
+                    columnCount:
+                      (layout.sectionColumns &&
+                        layout.sectionColumns[pageIdx] !== undefined)
+                        ? layout.sectionColumns[pageIdx]
+                        : layout.columns || 1,
+                    columnGap: `${layout.columnGapPx || 28}px`,
                   }}
                 />
 

@@ -573,8 +573,8 @@ export const PageLevelAIPopover: React.FC<PageLevelAIPopoverProps> = ({
             style={{
               padding: '3px 8px',
               fontSize: '9px',
-              backgroundColor: '#FFFFFF',
-              color: '#0D1B4C',
+              backgroundColor: 'var(--bg-stone)',
+              color: 'var(--ink-navy)',
             }}
           >
             {sample}
@@ -584,8 +584,8 @@ export const PageLevelAIPopover: React.FC<PageLevelAIPopoverProps> = ({
 
       <div
         style={{
-          border: isRecording ? '2px solid #16A34A' : '1px solid #CBD5E1',
-          backgroundColor: isRecording ? '#F0FDF4' : '#FFFFFF',
+          border: isRecording ? '2px solid #16A34A' : '1px solid var(--border-stone)',
+          backgroundColor: isRecording ? 'rgba(22, 163, 74, 0.15)' : 'var(--bg-stone)',
           padding: '8px 10px',
         }}
       >
@@ -601,7 +601,7 @@ export const PageLevelAIPopover: React.FC<PageLevelAIPopoverProps> = ({
             width: '100%',
             border: 'none',
             backgroundColor: 'transparent',
-            color: '#0F172A',
+            color: 'var(--ink-navy)',
             fontSize: '12.5px',
             lineHeight: 1.45,
             outline: 'none',
@@ -692,9 +692,9 @@ export const PageLevelAIPopover: React.FC<PageLevelAIPopoverProps> = ({
                 height: '28px',
                 border: isRecording
                   ? '1px solid #16A34A'
-                  : '1px solid #CBD5E1',
-                backgroundColor: isRecording ? '#16A34A' : '#F8FAFC',
-                color: isRecording ? '#FFFFFF' : '#0F172A',
+                  : '1px solid var(--border-stone)',
+                backgroundColor: isRecording ? '#16A34A' : 'var(--bg-stone)',
+                color: isRecording ? '#FFFFFF' : 'var(--ink-navy)',
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
@@ -709,9 +709,9 @@ export const PageLevelAIPopover: React.FC<PageLevelAIPopoverProps> = ({
               style={{
                 width: '28px',
                 height: '28px',
-                border: '1px solid #CBD5E1',
-                backgroundColor: '#F8FAFC',
-                color: '#0F172A',
+                border: '1px solid var(--border-stone)',
+                backgroundColor: 'var(--bg-stone)',
+                color: 'var(--ink-navy)',
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',

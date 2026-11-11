@@ -16,6 +16,8 @@ import {
   Sliders,
   Sparkles,
   Edit3,
+  LayoutGrid,
+  Check,
 } from 'lucide-react';
 import {
   DocumentCategory,
@@ -32,6 +34,12 @@ import {
   modifyExistingDocumentWithAI,
 } from '../services/aiGenerator';
 import { openDocumentFromComputerFile } from '../services/exportService';
+import {
+  getTemplatesForCategory,
+  getCoverStylesForCategory,
+  CoverPageDesign,
+  WorkspaceTemplate,
+} from '../services/templates';
 
 interface CreateDocumentModalProps {
   category: DocumentCategory;
@@ -52,11 +60,38 @@ export const CreateDocumentModal: React.FC<CreateDocumentModalProps> = ({
 }) => {
   const copy = CATEGORY_PAGE_COPY[category];
 
+  // Category-Specific Workspace Templates & Cover Page Designs (Requirements 7, 8, 9)
+  const availableTemplates = getTemplatesForCategory(category);
+  const availableCovers = getCoverStylesForCategory(category);
+
   // Requirement 15 & 17: Option A (Create New) vs Option B (Continue with Existing Document)
   const [workflowMode, setWorkflowMode] = useState<'new' | 'existing'>('new');
-  // Requirement 7: Make AI Optional when creating a document
-  const [creationMethod, setCreationMethod] = useState<'ai' | 'manual'>('ai');
+  // Requirement 7, 8, 9: Template selection workflow vs AI vs Manual
+  const [creationMethod, setCreationMethod] = useState<
+    'template' | 'ai' | 'manual'
+  >('template');
+  const [selectedTemplateId, setSelectedTemplateId] = useState<string>(
+    () => availableTemplates[0]?.id || ''
+  );
+  const [selectedCoverId, setSelectedCoverId] = useState<string>(
+    () =>
+      availableTemplates[0]?.defaultCoverId ||
+      availableCovers[0]?.id ||
+      'none'
+  );
   const [manualTitle, setManualTitle] = useState('');
+
+  useEffect(() => {
+    const tmpls = getTemplatesForCategory(category);
+    const cvs = getCoverStylesForCategory(category);
+    if (tmpls.length > 0) {
+      setSelectedTemplateId(tmpls[0].id);
+      setSelectedCoverId(tmpls[0].defaultCoverId || cvs[0]?.id || 'none');
+    } else {
+      setSelectedTemplateId('');
+      setSelectedCoverId(cvs[0]?.id || 'none');
+    }
+  }, [category]);
 
   // Requirement: Use default layout should always be the default when creating a new file or opening existing document
   const [layoutOption, setLayoutOption] = useState<'default' | 'custom'>('default');
@@ -466,11 +501,31 @@ export const CreateDocumentModal: React.FC<CreateDocumentModalProps> = ({
         }
       );
 
+      const cover =
+        selectedCoverId === 'none'
+          ? null
+          : availableCovers.find((c) => c.id === selectedCoverId);
+
+      let finalContent = generated.content;
+      let docPages: string[] = [generated.content];
+
+      if (cover) {
+        const coverHtml = cover.renderHtml(generated.title, {
+          institution: institution.trim() || undefined,
+          department: department.trim() || undefined,
+          courseCode: courseCode.trim() || undefined,
+          studentName: studentName.trim() || undefined,
+          lecturerOrSupervisor: lecturer.trim() || undefined,
+        });
+        finalContent = `${coverHtml}<hr class="page-break" />${generated.content}`;
+        docPages = [coverHtml, generated.content];
+      }
+
       const newDoc: DocumentItem = {
         id: `doc-${Date.now()}`,
         title: generated.title,
         category,
-        content: generated.content,
+        content: finalContent,
         createdAt: todayFormatted,
         updatedAt: todayFormatted,
         status: 'Draft',
@@ -478,6 +533,7 @@ export const CreateDocumentModal: React.FC<CreateDocumentModalProps> = ({
         format: 'DOCX',
         metadata: {
           ...generated.metadata,
+          pages: docPages,
           layout: chosenLayout,
           orientation: chosenLayout.orientation,
           marginSize: chosenLayout.marginPreset,
@@ -490,15 +546,110 @@ export const CreateDocumentModal: React.FC<CreateDocumentModalProps> = ({
     }, 380);
   };
 
-  // Requirement 7: Option 2 - Create Without AI (Blank Document or Uploaded File)
+  // Requirements 7, 8, 9: Create Document from Academic/Category Template with Cover Page
+  const handleCreateFromTemplate = () => {
+    const todayFormatted = getCurrentFormattedDate();
+    const chosenLayout =
+      layoutOption === 'custom' ? customLayout : DEFAULT_PAGE_LAYOUT;
+
+    const tmpl =
+      availableTemplates.find((t) => t.id === selectedTemplateId) ||
+      availableTemplates[0];
+    const cover =
+      selectedCoverId === 'none'
+        ? null
+        : availableCovers.find((c) => c.id === selectedCoverId);
+
+    const effectiveTitle =
+      manualTitle.trim() ||
+      (tmpl ? tmpl.name : `${copy.modalTitle.replace('Create ', '')}`);
+
+    const meta = {
+      institution: institution.trim() || undefined,
+      department: department.trim() || undefined,
+      courseCode: courseCode.trim() || undefined,
+      studentName: studentName.trim() || undefined,
+      lecturerOrSupervisor: lecturer.trim() || undefined,
+      referencingStyle,
+      wordCountTarget: wordCount.trim() || undefined,
+      showPageNumbers: true,
+      orientation: chosenLayout.orientation,
+      marginSize: chosenLayout.marginPreset,
+      fontFamily: 'Times New Roman',
+      layout: chosenLayout,
+    };
+
+    const docPages: string[] = [];
+    if (cover) {
+      docPages.push(cover.renderHtml(effectiveTitle, meta));
+    }
+
+    if (tmpl) {
+      const bodyPages = tmpl.generateBodyHtml(effectiveTitle, meta);
+      docPages.push(...bodyPages);
+    } else {
+      docPages.push(
+        `<h1>${effectiveTitle}</h1><p>Start drafting your content here...</p>`
+      );
+    }
+
+    const fullContent = docPages.join('<hr class="page-break" />');
+
+    const newDoc: DocumentItem = {
+      id: `doc-${Date.now()}`,
+      title: effectiveTitle,
+      category,
+      content: fullContent,
+      createdAt: todayFormatted,
+      updatedAt: todayFormatted,
+      status: 'Draft',
+      syncStatus: isOnline ? 'saved' : 'offline-pending',
+      format: 'DOCX',
+      metadata: {
+        ...meta,
+        pages: docPages,
+      },
+      aiHistory: [],
+    };
+
+    onDocumentCreated(newDoc, false);
+  };
+
+  // Requirement 7: Option 3 - Create Without AI (Blank Document or Uploaded File)
   const handleCreateBlankDocument = () => {
     const todayFormatted = getCurrentFormattedDate();
     const effectiveTitle =
       manualTitle.trim() ||
       `${copy.modalTitle.replace('Create ', '')} (Blank Document)`;
-    const blankContent = `<h1>${effectiveTitle}</h1><p><br/></p>`;
     const chosenLayout =
       layoutOption === 'custom' ? customLayout : DEFAULT_PAGE_LAYOUT;
+
+    const cover =
+      selectedCoverId === 'none'
+        ? null
+        : availableCovers.find((c) => c.id === selectedCoverId);
+
+    const docPages: string[] = [];
+    const meta = {
+      institution: institution.trim() || undefined,
+      department: department.trim() || undefined,
+      courseCode: courseCode.trim() || undefined,
+      studentName: studentName.trim() || undefined,
+      lecturerOrSupervisor: lecturer.trim() || undefined,
+      referencingStyle,
+      wordCountTarget: wordCount.trim() || undefined,
+      showPageNumbers: true,
+      orientation: chosenLayout.orientation,
+      marginSize: chosenLayout.marginPreset,
+      fontFamily: 'Times New Roman',
+      layout: chosenLayout,
+    };
+
+    if (cover) {
+      docPages.push(cover.renderHtml(effectiveTitle, meta));
+    }
+    docPages.push(`<h1>${effectiveTitle}</h1><p><br/></p>`);
+    const blankContent = docPages.join('<hr class="page-break" />');
 
     const blankDoc: DocumentItem = {
       id: `doc-${Date.now()}`,
@@ -511,18 +662,8 @@ export const CreateDocumentModal: React.FC<CreateDocumentModalProps> = ({
       syncStatus: isOnline ? 'saved' : 'offline-pending',
       format: 'DOCX',
       metadata: {
-        institution: institution.trim() || undefined,
-        department: department.trim() || undefined,
-        courseCode: courseCode.trim() || undefined,
-        studentName: studentName.trim() || undefined,
-        lecturerOrSupervisor: lecturer.trim() || undefined,
-        referencingStyle,
-        wordCountTarget: wordCount.trim() || undefined,
-        showPageNumbers: true,
-        orientation: chosenLayout.orientation,
-        marginSize: chosenLayout.marginPreset,
-        fontFamily: 'Times New Roman',
-        layout: chosenLayout,
+        ...meta,
+        pages: docPages,
       },
       aiHistory: [],
     };
@@ -760,20 +901,67 @@ export const CreateDocumentModal: React.FC<CreateDocumentModalProps> = ({
             </div>
           </div>
 
-          {/* Requirement 7: Make AI Optional when creating a document */}
+          {/* Requirement 7, 8, 9: Creation Method Selector */}
           {workflowMode === 'new' && (
             <div
               style={{
                 display: 'grid',
-                gridTemplateColumns: '1fr 1fr',
+                gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
                 gap: '8px',
               }}
             >
               <button
                 type="button"
+                onClick={() => setCreationMethod('template')}
+                style={{
+                  padding: '10px 12px',
+                  border:
+                    creationMethod === 'template'
+                      ? '2px solid var(--accent-blue)'
+                      : '1px solid var(--border-stone)',
+                  backgroundColor:
+                    creationMethod === 'template'
+                      ? 'rgba(20, 71, 230, 0.05)'
+                      : 'var(--bg-ivory)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '8px',
+                  cursor: 'pointer',
+                  textAlign: 'left',
+                }}
+              >
+                <LayoutGrid
+                  size={16}
+                  color={
+                    creationMethod === 'template'
+                      ? 'var(--accent-blue)'
+                      : 'var(--ink-muted)'
+                  }
+                />
+                <div>
+                  <div
+                    style={{
+                      fontSize: '12px',
+                      fontWeight: 700,
+                      color:
+                        creationMethod === 'template'
+                          ? 'var(--accent-blue)'
+                          : 'var(--ink-navy)',
+                    }}
+                  >
+                    Option 1: Template &amp; Cover
+                  </div>
+                  <div style={{ fontSize: '10.5px', color: 'var(--ink-muted)' }}>
+                    Academic sections &amp; cover page
+                  </div>
+                </div>
+              </button>
+
+              <button
+                type="button"
                 onClick={() => setCreationMethod('ai')}
                 style={{
-                  padding: '10px 14px',
+                  padding: '10px 12px',
                   border:
                     creationMethod === 'ai'
                       ? '2px solid var(--accent-blue)'
@@ -800,7 +988,7 @@ export const CreateDocumentModal: React.FC<CreateDocumentModalProps> = ({
                 <div>
                   <div
                     style={{
-                      fontSize: '12.5px',
+                      fontSize: '12px',
                       fontWeight: 700,
                       color:
                         creationMethod === 'ai'
@@ -808,10 +996,10 @@ export const CreateDocumentModal: React.FC<CreateDocumentModalProps> = ({
                           : 'var(--ink-navy)',
                     }}
                   >
-                    Option 1: Create with AI
+                    Option 2: Create with AI
                   </div>
-                  <div style={{ fontSize: '11px', color: 'var(--ink-muted)' }}>
-                    Generate structured draft from instructions or prompt
+                  <div style={{ fontSize: '10.5px', color: 'var(--ink-muted)' }}>
+                    Draft from prompt or voice
                   </div>
                 </div>
               </button>
@@ -820,7 +1008,7 @@ export const CreateDocumentModal: React.FC<CreateDocumentModalProps> = ({
                 type="button"
                 onClick={() => setCreationMethod('manual')}
                 style={{
-                  padding: '10px 14px',
+                  padding: '10px 12px',
                   border:
                     creationMethod === 'manual'
                       ? '2px solid var(--accent-blue)'
@@ -847,7 +1035,7 @@ export const CreateDocumentModal: React.FC<CreateDocumentModalProps> = ({
                 <div>
                   <div
                     style={{
-                      fontSize: '12.5px',
+                      fontSize: '12px',
                       fontWeight: 700,
                       color:
                         creationMethod === 'manual'
@@ -855,13 +1043,413 @@ export const CreateDocumentModal: React.FC<CreateDocumentModalProps> = ({
                           : 'var(--ink-navy)',
                     }}
                   >
-                    Option 2: Create Without AI
+                    Option 3: Create Without AI
                   </div>
-                  <div style={{ fontSize: '11px', color: 'var(--ink-muted)' }}>
-                    Start with a blank document or upload an existing file
+                  <div style={{ fontSize: '10.5px', color: 'var(--ink-muted)' }}>
+                    Blank canvas or file upload
                   </div>
                 </div>
               </button>
+            </div>
+          )}
+
+          {/* Requirement 7, 8, 9: Category-Specific Workspace Templates & Cover Page Designs */}
+          {workflowMode === 'new' && creationMethod === 'template' && (
+            <div
+              style={{
+                display: 'flex',
+                flexDirection: 'column',
+                gap: '16px',
+              }}
+            >
+              {/* Step 1: Template Selection */}
+              <div>
+                <label className="ed-field-label" style={{ marginBottom: '8px' }}>
+                  1. Select Workspace Template ({copy.modalTitle.replace('Create ', '')})
+                </label>
+                <div
+                  style={{
+                    display: 'grid',
+                    gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))',
+                    gap: '10px',
+                  }}
+                >
+                  {availableTemplates.map((tmpl) => {
+                    const isSelected = selectedTemplateId === tmpl.id;
+                    return (
+                      <div
+                        key={tmpl.id}
+                        onClick={() => {
+                          setSelectedTemplateId(tmpl.id);
+                          if (tmpl.defaultCoverId) {
+                            setSelectedCoverId(tmpl.defaultCoverId);
+                          }
+                        }}
+                        style={{
+                          border: isSelected
+                            ? '2px solid var(--accent-blue)'
+                            : '1px solid var(--border-stone)',
+                          backgroundColor: isSelected
+                            ? 'rgba(20, 71, 230, 0.04)'
+                            : 'var(--bg-stone)',
+                          padding: '12px 14px',
+                          cursor: 'pointer',
+                          display: 'flex',
+                          flexDirection: 'column',
+                          justifyContent: 'space-between',
+                          gap: '8px',
+                          transition: 'all 0.15s ease',
+                        }}
+                      >
+                        <div>
+                          <div
+                            style={{
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'space-between',
+                              gap: '6px',
+                              marginBottom: '4px',
+                            }}
+                          >
+                            <span
+                              style={{
+                                fontSize: '13px',
+                                fontWeight: 700,
+                                color: isSelected
+                                  ? 'var(--accent-blue)'
+                                  : 'var(--ink-navy)',
+                              }}
+                            >
+                              {tmpl.name}
+                            </span>
+                            <span
+                              className="mono-label"
+                              style={{
+                                fontSize: '8.5px',
+                                backgroundColor: isSelected
+                                  ? 'var(--accent-blue)'
+                                  : 'var(--bg-stone-dark)',
+                                color: isSelected ? '#FFFFFF' : 'var(--ink-body)',
+                                padding: '2px 6px',
+                              }}
+                            >
+                              {tmpl.badge}
+                            </span>
+                          </div>
+                          <p
+                            style={{
+                              fontSize: '11px',
+                              color: 'var(--ink-muted)',
+                              lineHeight: 1.45,
+                              margin: 0,
+                            }}
+                          >
+                            {tmpl.description}
+                          </p>
+                        </div>
+
+                        <div
+                          style={{
+                            fontSize: '10px',
+                            color: 'var(--ink-faint)',
+                            display: 'flex',
+                            flexWrap: 'wrap',
+                            gap: '4px',
+                          }}
+                        >
+                          {tmpl.sections.map((sec, idx) => (
+                            <span
+                              key={idx}
+                              style={{
+                                padding: '1px 5px',
+                                backgroundColor: 'var(--bg-ivory)',
+                                border: '1px solid var(--border-ivory)',
+                              }}
+                            >
+                              {sec}
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* Step 2: Cover Page Design (Requirement 8) */}
+              <div>
+                <div
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    marginBottom: '8px',
+                  }}
+                >
+                  <label className="ed-field-label" style={{ marginBottom: 0 }}>
+                    2. Select Cover Page Design (Inserted as Page 1)
+                  </label>
+                  <span style={{ fontSize: '10.5px', color: 'var(--ink-muted)' }}>
+                    Fully editable inside workspace
+                  </span>
+                </div>
+
+                <div
+                  style={{
+                    display: 'grid',
+                    gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
+                    gap: '8px',
+                  }}
+                >
+                  {/* Option for No Cover */}
+                  <div
+                    onClick={() => setSelectedCoverId('none')}
+                    style={{
+                      border:
+                        selectedCoverId === 'none'
+                          ? '2px solid var(--accent-blue)'
+                          : '1px solid var(--border-stone)',
+                      backgroundColor:
+                        selectedCoverId === 'none'
+                          ? 'rgba(20, 71, 230, 0.04)'
+                          : 'var(--bg-stone)',
+                      padding: '10px 12px',
+                      cursor: 'pointer',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      justifyContent: 'center',
+                      gap: '4px',
+                      minHeight: '84px',
+                    }}
+                  >
+                    <span
+                      style={{
+                        fontSize: '11.5px',
+                        fontWeight: 700,
+                        color:
+                          selectedCoverId === 'none'
+                            ? 'var(--accent-blue)'
+                            : 'var(--ink-navy)',
+                      }}
+                    >
+                      No Cover Page
+                    </span>
+                    <span style={{ fontSize: '10px', color: 'var(--ink-muted)' }}>
+                      Start directly with Section 1 / Body content.
+                    </span>
+                  </div>
+
+                  {availableCovers.map((cov) => {
+                    const isSelected = selectedCoverId === cov.id;
+                    return (
+                      <div
+                        key={cov.id}
+                        onClick={() => setSelectedCoverId(cov.id)}
+                        style={{
+                          border: isSelected
+                            ? '2px solid var(--accent-blue)'
+                            : '1px solid var(--border-stone)',
+                          backgroundColor: isSelected
+                            ? 'rgba(20, 71, 230, 0.04)'
+                            : 'var(--bg-stone)',
+                          padding: '10px 12px',
+                          cursor: 'pointer',
+                          display: 'flex',
+                          flexDirection: 'column',
+                          gap: '6px',
+                          position: 'relative',
+                          borderLeft: `4px solid ${cov.accentColor}`,
+                        }}
+                      >
+                        <div
+                          style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'space-between',
+                          }}
+                        >
+                          <span
+                            style={{
+                              fontSize: '11.5px',
+                              fontWeight: 700,
+                              color: isSelected
+                                ? 'var(--accent-blue)'
+                                : 'var(--ink-navy)',
+                            }}
+                          >
+                            {cov.name}
+                          </span>
+                          {isSelected && (
+                            <Check size={13} color="var(--accent-blue)" />
+                          )}
+                        </div>
+                        <span
+                          style={{
+                            fontSize: '9.5px',
+                            color: 'var(--ink-muted)',
+                            lineHeight: 1.35,
+                          }}
+                        >
+                          {cov.description}
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* Step 3: Document Title & Metadata Details */}
+              <div
+                style={{
+                  padding: '12px 14px',
+                  backgroundColor: 'var(--bg-stone)',
+                  border: '1px solid var(--border-ivory)',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: '10px',
+                }}
+              >
+                <div>
+                  <label className="ed-field-label">Document Title</label>
+                  <input
+                    type="text"
+                    value={manualTitle}
+                    onChange={(e) => setManualTitle(e.target.value)}
+                    placeholder={`e.g. ${
+                      availableTemplates.find((t) => t.id === selectedTemplateId)
+                        ?.name || 'Academic Assignment Title'
+                    }`}
+                    className="ed-input"
+                    style={{ fontSize: '13px' }}
+                  />
+                </div>
+
+                {/* Optional Academic Fields Accordion */}
+                <div>
+                  <button
+                    type="button"
+                    onClick={() => setShowOptional((p) => !p)}
+                    style={{
+                      background: 'none',
+                      border: 'none',
+                      padding: 0,
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '6px',
+                      color: 'var(--accent-blue)',
+                      fontSize: '11.5px',
+                      fontWeight: 600,
+                      cursor: 'pointer',
+                    }}
+                  >
+                    <span>
+                      {showOptional
+                        ? 'Hide Cover Page Metadata Fields'
+                        : '+ Customize Cover Page Fields (Institution, Student Name, Course Code)'}
+                    </span>
+                    {showOptional ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
+                  </button>
+
+                  {showOptional && (
+                    <div
+                      style={{
+                        display: 'grid',
+                        gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))',
+                        gap: '10px',
+                        marginTop: '10px',
+                      }}
+                    >
+                      <div>
+                        <label className="ed-field-label">Institution / University</label>
+                        <input
+                          type="text"
+                          value={institution}
+                          onChange={(e) => setInstitution(e.target.value)}
+                          placeholder="e.g. University of Lagos / Covenant Univ"
+                          className="ed-input"
+                          style={{ padding: '6px 8px', fontSize: '11px' }}
+                        />
+                      </div>
+                      <div>
+                        <label className="ed-field-label">Department / Faculty</label>
+                        <input
+                          type="text"
+                          value={department}
+                          onChange={(e) => setDepartment(e.target.value)}
+                          placeholder="e.g. Faculty of Physical Sciences"
+                          className="ed-input"
+                          style={{ padding: '6px 8px', fontSize: '11px' }}
+                        />
+                      </div>
+                      <div>
+                        <label className="ed-field-label">Course Code &amp; Title</label>
+                        <input
+                          type="text"
+                          value={courseCode}
+                          onChange={(e) => setCourseCode(e.target.value)}
+                          placeholder="e.g. CSC 411 — Artificial Intelligence"
+                          className="ed-input"
+                          style={{ padding: '6px 8px', fontSize: '11px' }}
+                        />
+                      </div>
+                      <div>
+                        <label className="ed-field-label">Student / Candidate Name</label>
+                        <input
+                          type="text"
+                          value={studentName}
+                          onChange={(e) => setStudentName(e.target.value)}
+                          placeholder="e.g. Chukwudi Adebayo / Candidate Name"
+                          className="ed-input"
+                          style={{ padding: '6px 8px', fontSize: '11px' }}
+                        />
+                      </div>
+                      <div>
+                        <label className="ed-field-label">Lecturer / Supervisor</label>
+                        <input
+                          type="text"
+                          value={lecturer}
+                          onChange={(e) => setLecturer(e.target.value)}
+                          placeholder="e.g. Dr. O. A. Balogun"
+                          className="ed-input"
+                          style={{ padding: '6px 8px', fontSize: '11px' }}
+                        />
+                      </div>
+                      <div>
+                        <label className="ed-field-label">Referencing Standard</label>
+                        <select
+                          value={referencingStyle}
+                          onChange={(e) => setReferencingStyle(e.target.value)}
+                          className="ed-select"
+                          style={{ padding: '6px 8px', fontSize: '11px' }}
+                        >
+                          <option value="APA 7th Edition">APA 7th Edition</option>
+                          <option value="Harvard">Harvard Referencing</option>
+                          <option value="IEEE">IEEE Style</option>
+                          <option value="Chicago / Turabian">Chicago / Turabian</option>
+                          <option value="MLA 9th Edition">MLA 9th Edition</option>
+                        </select>
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                <div style={{ display: 'flex', justifyContent: 'flex-end', paddingTop: '6px' }}>
+                  <button
+                    type="button"
+                    onClick={handleCreateFromTemplate}
+                    className="btn-ed-primary"
+                    style={{
+                      padding: '10px 20px',
+                      fontSize: '12px',
+                      fontWeight: 700,
+                      gap: '8px',
+                    }}
+                  >
+                    <Check size={14} />
+                    <span>Create Document from Template &amp; Open Workspace</span>
+                  </button>
+                </div>
+              </div>
             </div>
           )}
 
@@ -1371,6 +1959,79 @@ export const CreateDocumentModal: React.FC<CreateDocumentModalProps> = ({
               </div>
             )}
           </div>
+
+          {/* Cover Page Design Picker for AI Generation */}
+          {workflowMode === 'new' && (
+            <div
+              style={{
+                padding: '10px 14px',
+                backgroundColor: 'var(--bg-stone)',
+                border: '1px solid var(--border-ivory)',
+                marginTop: '8px',
+              }}
+            >
+              <div
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  marginBottom: '6px',
+                }}
+              >
+                <span
+                  style={{
+                    fontSize: '11px',
+                    fontWeight: 700,
+                    color: 'var(--ink-navy)',
+                  }}
+                >
+                  Cover Page Design (Page 1)
+                </span>
+                <span style={{ fontSize: '10px', color: 'var(--ink-muted)' }}>
+                  Optional cover page
+                </span>
+              </div>
+              <div
+                style={{
+                  display: 'grid',
+                  gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))',
+                  gap: '6px',
+                }}
+              >
+                <button
+                  type="button"
+                  onClick={() => setSelectedCoverId('none')}
+                  className={
+                    selectedCoverId === 'none'
+                      ? 'btn-ed-primary'
+                      : 'btn-ed-subtle'
+                  }
+                  style={{ padding: '5px 8px', fontSize: '10px' }}
+                >
+                  No Cover Page
+                </button>
+                {availableCovers.map((cov) => (
+                  <button
+                    key={cov.id}
+                    type="button"
+                    onClick={() => setSelectedCoverId(cov.id)}
+                    className={
+                      selectedCoverId === cov.id
+                        ? 'btn-ed-primary'
+                        : 'btn-ed-subtle'
+                    }
+                    style={{
+                      padding: '5px 8px',
+                      fontSize: '10px',
+                      borderLeft: `3px solid ${cov.accentColor}`,
+                    }}
+                  >
+                    {cov.name}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
 
           {/* Expandable Optional Information Section (Only for new documents) */}
           {workflowMode === 'new' && (
