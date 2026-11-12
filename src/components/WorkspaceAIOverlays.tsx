@@ -13,7 +13,9 @@ import {
   Paperclip,
   FileText,
 } from 'lucide-react';
-import { CanvasImageElement, DrawingElement } from '../types';
+import { AIAttachment, CanvasImageElement, DrawingElement } from '../types';
+import { processMultipleFiles } from '../services/fileProcessing';
+import { AIAttachmentsPreview } from './AIAttachmentsPreview';
 
 /**
  * Reusable Voice-to-Text Hook for all AI interfaces (Instant live dictation)
@@ -170,12 +172,25 @@ export const TextSelectionAIPopup: React.FC<TextSelectionAIPopupProps> = ({
   onSubmitTextAI,
 }) => {
   const [instruction, setInstruction] = useState('');
+  const [attachments, setAttachments] = useState<AIAttachment[]>([]);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   const { isRecording, toggleRecording, stopRecording } =
     useVoiceToText(setInstruction);
 
   const displayValue = instruction;
+
+  const handleFileAttach = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files || []);
+    if (files.length === 0) return;
+    try {
+      const processed = await processMultipleFiles(files);
+      setAttachments((prev) => [...prev, ...processed]);
+    } catch (err) {
+      console.error('Failed to attach files:', err);
+    }
+    e.target.value = '';
+  };
 
   // Requirement 9: Auto-expand textarea
   useEffect(() => {
@@ -191,6 +206,7 @@ export const TextSelectionAIPopup: React.FC<TextSelectionAIPopupProps> = ({
     if (!finalPrompt) return;
     onSubmitTextAI(finalPrompt);
     setInstruction('');
+    setAttachments([]);
   };
 
   // Clamp coordinates to viewport so popup stays visible
@@ -381,6 +397,15 @@ export const TextSelectionAIPopup: React.FC<TextSelectionAIPopupProps> = ({
           }}
         />
 
+        {/* Attached Reference Preview */}
+        {attachments.length > 0 && (
+          <AIAttachmentsPreview
+            compact
+            attachments={attachments}
+            onRemove={(id) => setAttachments((prev) => prev.filter((a) => a.id !== id))}
+          />
+        )}
+
         <div
           style={{
             display: 'flex',
@@ -399,6 +424,30 @@ export const TextSelectionAIPopup: React.FC<TextSelectionAIPopupProps> = ({
           </span>
 
           <div style={{ display: 'flex', gap: '5px' }}>
+            <label
+              title="Attach reference document or image"
+              style={{
+                width: '28px',
+                height: '28px',
+                border: '1px solid var(--border-stone)',
+                backgroundColor: 'var(--bg-stone)',
+                color: 'var(--ink-navy)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                cursor: 'pointer',
+              }}
+            >
+              <Paperclip size={12} color="var(--accent-blue)" />
+              <input
+                type="file"
+                multiple
+                accept=".pdf,.docx,.txt,image/*"
+                onChange={handleFileAttach}
+                style={{ display: 'none' }}
+              />
+            </label>
+
             <button
               type="button"
               onClick={toggleRecording}
@@ -423,7 +472,7 @@ export const TextSelectionAIPopup: React.FC<TextSelectionAIPopupProps> = ({
             <button
               type="button"
               onClick={() => handleRun()}
-              disabled={!displayValue.trim()}
+              disabled={!displayValue.trim() && attachments.length === 0}
               className="btn-ed-primary"
               style={{ height: '28px', padding: '0 10px', fontSize: '9.5px' }}
             >
@@ -456,9 +505,7 @@ export const PageLevelAIPopover: React.FC<PageLevelAIPopoverProps> = ({
   onApplyPageAI,
 }) => {
   const [instruction, setInstruction] = useState('');
-  const [attachments, setAttachments] = useState<
-    { name: string; extractedText: string }[]
-  >([]);
+  const [attachments, setAttachments] = useState<AIAttachment[]>([]);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   const { isRecording, toggleRecording, stopRecording } =
@@ -475,19 +522,13 @@ export const PageLevelAIPopover: React.FC<PageLevelAIPopoverProps> = ({
 
   const handleFileAttach = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(e.target.files || []);
-    const added: { name: string; extractedText: string }[] = [];
-    for (const f of files) {
-      if (f.type.startsWith('text/') || f.name.endsWith('.txt') || f.name.endsWith('.md')) {
-        const t = await f.text();
-        added.push({ name: f.name, extractedText: t.slice(0, 500) });
-      } else {
-        added.push({
-          name: f.name,
-          extractedText: `Key data and reference points extracted from "${f.name}".`,
-        });
-      }
+    if (files.length === 0) return;
+    try {
+      const processed = await processMultipleFiles(files);
+      setAttachments((prev) => [...prev, ...processed]);
+    } catch (err) {
+      console.error('Failed to attach files in page AI:', err);
     }
-    setAttachments((prev) => [...prev, ...added]);
     e.target.value = '';
   };
 
@@ -495,7 +536,11 @@ export const PageLevelAIPopover: React.FC<PageLevelAIPopoverProps> = ({
     if (isRecording) stopRecording();
     const finalInstruction = (preset ?? displayValue).trim();
     if (!finalInstruction) return;
-    onApplyPageAI(pageIndex, finalInstruction, attachments);
+    onApplyPageAI(
+      pageIndex,
+      finalInstruction,
+      attachments.map((a) => ({ name: a.name, extractedText: a.extractedText || '' }))
+    );
     setInstruction('');
     setAttachments([]);
   };
@@ -626,46 +671,12 @@ export const PageLevelAIPopover: React.FC<PageLevelAIPopoverProps> = ({
         />
 
         {attachments.length > 0 && (
-          <div
-            style={{
-              display: 'flex',
-              flexWrap: 'wrap',
-              gap: '5px',
-              marginTop: '4px',
-            }}
-          >
-            {attachments.map((att, i) => (
-              <span
-                key={i}
-                style={{
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  gap: '4px',
-                  fontSize: '10.5px',
-                  padding: '2px 7px',
-                  backgroundColor: '#EEF2FF',
-                  color: '#1447E6',
-                  border: '1px solid #C7D2FE',
-                }}
-              >
-                <FileText size={11} />
-                {att.name}
-                <button
-                  type="button"
-                  onClick={() =>
-                    setAttachments((prev) => prev.filter((_, idx) => idx !== i))
-                  }
-                  style={{
-                    background: 'none',
-                    border: 'none',
-                    cursor: 'pointer',
-                    color: '#1447E6',
-                  }}
-                >
-                  ×
-                </button>
-              </span>
-            ))}
+          <div style={{ marginTop: '4px' }}>
+            <AIAttachmentsPreview
+              compact
+              attachments={attachments}
+              onRemove={(id) => setAttachments((prev) => prev.filter((a) => a.id !== id))}
+            />
           </div>
         )}
 

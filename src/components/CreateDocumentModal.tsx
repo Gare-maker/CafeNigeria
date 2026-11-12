@@ -24,6 +24,7 @@ import {
   DocumentCategory,
   DocumentItem,
   DEFAULT_PAGE_LAYOUT,
+  AIAttachment,
 } from '../types';
 import {
   CATEGORY_PAGE_COPY,
@@ -31,8 +32,11 @@ import {
   generateDocumentFromNaturalPrompt,
   getCurrentFormattedDate,
   modifyExistingDocumentWithAI,
+  generateDocumentFromImageAI,
 } from '../services/aiGenerator';
 import { openDocumentFromComputerFile } from '../services/exportService';
+import { processMultipleFiles } from '../services/fileProcessing';
+import { AIAttachmentsPreview } from './AIAttachmentsPreview';
 import {
   getTemplatesForCategory,
   WorkspaceTemplate,
@@ -87,15 +91,9 @@ export const CreateDocumentModal: React.FC<CreateDocumentModalProps> = ({
   const [recordingMessage, setRecordingMessage] = useState('');
   const [micError, setMicError] = useState('');
 
-  const [uploadedFiles, setUploadedFiles] = useState<
-    {
-      name: string;
-      extractedText: string;
-      docId?: string;
-      type?: 'file' | 'workspace_doc' | 'image';
-    }[]
-  >([]);
+  const [uploadedFiles, setUploadedFiles] = useState<AIAttachment[]>([]);
   const [showWorkspaceDocPicker, setShowWorkspaceDocPicker] = useState(false);
+  const [extractionStatus, setExtractionStatus] = useState<string>('');
 
   // Optional Academic Details (Collapsed by default)
   const [showOptional, setShowOptional] = useState(false);
@@ -239,60 +237,37 @@ export const CreateDocumentModal: React.FC<CreateDocumentModalProps> = ({
     }
   };
 
-  // Section 5: Add File Local Upload
-  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+  // Section 5: Add File Local Upload using true file reader engine
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(e.target.files || []);
     if (files.length === 0) return;
 
-    const newAttachments: {
-      name: string;
-      extractedText: string;
-      type: 'file' | 'image';
-    }[] = [];
-
-    for (const file of files) {
-      if (file.type === 'application/pdf' || file.name.endsWith('.pdf')) {
-        newAttachments.push({
-          name: file.name,
-          extractedText: `Extracted content from PDF "${file.name}": Academic background, literature citations, research methodology and statistical data tables.`,
-          type: 'file',
-        });
-      } else if (file.type.startsWith('image/')) {
-        newAttachments.push({
-          name: file.name,
-          extractedText: `Extracted OCR text from image "${file.name}": Handwritten notes, lecture slide diagrams, and mathematical formula annotations.`,
-          type: 'image',
-        });
-      } else {
-        newAttachments.push({
-          name: file.name,
-          extractedText: `Extracted reference material from "${file.name}": Core academic objectives, case study notes, and syllabus references.`,
-          type: 'file',
-        });
-      }
+    try {
+      const processed = await processMultipleFiles(files);
+      setUploadedFiles((prev) => [...prev, ...processed]);
+    } catch (err) {
+      console.error('Failed to process uploaded files:', err);
     }
-
-    setUploadedFiles((prev) => [...prev, ...newAttachments]);
     e.target.value = '';
   };
 
   // Section 5: Add File from Existing Workspace Documents
   const handleSelectWorkspaceDocAsReference = (doc: DocumentItem) => {
-    const already = uploadedFiles.some((f) => f.docId === doc.id);
+    const already = uploadedFiles.some((f) => f.id === doc.id);
     if (already) {
       setShowWorkspaceDocPicker(false);
       return;
     }
-    const snippet = doc.content.replace(/<[^>]+>/g, ' ').slice(0, 300);
-    setUploadedFiles((prev) => [
-      ...prev,
-      {
-        name: `[Workspace] ${doc.title}`,
-        extractedText: `Referenced content from workspace document "${doc.title}": ${snippet}`,
-        docId: doc.id,
-        type: 'workspace_doc',
-      },
-    ]);
+    const snippet = doc.content.replace(/<[^>]+>/g, ' ').slice(0, 500);
+    const newRef: AIAttachment = {
+      id: doc.id,
+      name: `[Workspace] ${doc.title}`,
+      type: 'document',
+      fileType: 'workspace',
+      sizeFormatted: `${Math.round(doc.content.length / 1024 * 10) / 10} KB`,
+      extractedText: `Referenced content from workspace document "${doc.title}":\n${snippet}`,
+    };
+    setUploadedFiles((prev) => [...prev, newRef]);
     setShowWorkspaceDocPicker(false);
   };
 
@@ -331,12 +306,64 @@ export const CreateDocumentModal: React.FC<CreateDocumentModalProps> = ({
     }
   };
 
-  // Section 7 Option A: Create with AI
-  const handleGenerate = () => {
+  // Section 7 Option A: Create with AI (Supports Multimodal Image-to-Doc and Reference-Aware Generation)
+  const handleGenerate = async () => {
     if (isRecording) stopVoiceRecording();
     const combinedPrompt = [prompt.trim(), interimTranscript.trim()]
       .filter(Boolean)
       .join(' ');
+
+    // For Image-to-Document, task is strictly image reconstruction:
+    if (category === 'image-to-notes') {
+      const imgAttachment = uploadedFiles.find((f) => f.type === 'image') || uploadedFiles[0];
+      if (!imgAttachment) return;
+
+      setIsGenerating(true);
+      setExtractionStatus('Reading image and inspecting document layout...');
+      const todayFormatted = getCurrentFormattedDate();
+
+      setTimeout(() => {
+        setExtractionStatus('Extracting printed & handwritten text and reconstructing tables...');
+      }, 700);
+
+      try {
+        const generated = await generateDocumentFromImageAI(imgAttachment, combinedPrompt, {
+          institution: institution.trim() || undefined,
+          department: department.trim() || undefined,
+          courseCode: courseCode.trim() || undefined,
+          studentName: studentName.trim() || undefined,
+        });
+
+        const newDoc: DocumentItem = {
+          id: `doc-${Date.now()}`,
+          title: generated.title || `Converted - ${imgAttachment.name.replace(/\.[^/.]+$/, '')}`,
+          category: 'image-to-notes',
+          content: generated.content,
+          createdAt: todayFormatted,
+          updatedAt: todayFormatted,
+          status: 'Draft',
+          syncStatus: isOnline ? 'saved' : 'offline-pending',
+          format: 'DOCX',
+          metadata: {
+            ...generated.metadata,
+            layout: DEFAULT_PAGE_LAYOUT,
+            orientation: 'portrait',
+            marginSize: 'normal',
+          },
+          aiHistory: [],
+        };
+
+        setIsGenerating(false);
+        setExtractionStatus('');
+        onDocumentCreated(newDoc, false);
+      } catch (err) {
+        console.error('Image to document error:', err);
+        setIsGenerating(false);
+        setExtractionStatus('');
+      }
+      return;
+    }
+
     const effectivePrompt =
       combinedPrompt ||
       (uploadedFiles.length > 0
@@ -346,14 +373,20 @@ export const CreateDocumentModal: React.FC<CreateDocumentModalProps> = ({
     if (!effectivePrompt) return;
 
     setIsGenerating(true);
-    setTimeout(() => {
-      const todayFormatted = getCurrentFormattedDate();
+    setExtractionStatus('Analyzing references and preparing document structure...');
+    const todayFormatted = getCurrentFormattedDate();
 
+    const refPayload = uploadedFiles.map((f) => ({
+      name: f.name,
+      extractedText: f.extractedText || `Reference file: ${f.name} (${f.fileType.toUpperCase()})`,
+    }));
+
+    setTimeout(() => {
       if (workflowMode === 'existing' && selectedExistingDoc) {
         const updatedResult = modifyExistingDocumentWithAI(
           selectedExistingDoc,
           effectivePrompt,
-          uploadedFiles
+          refPayload
         );
 
         if (preserveMode === 'overwrite' && !importedComputerDoc) {
@@ -364,6 +397,7 @@ export const CreateDocumentModal: React.FC<CreateDocumentModalProps> = ({
             syncStatus: isOnline ? 'saved' : 'offline-pending',
           };
           setIsGenerating(false);
+          setExtractionStatus('');
           onDocumentCreated(updatedExisting, true);
           return;
         } else {
@@ -381,6 +415,7 @@ export const CreateDocumentModal: React.FC<CreateDocumentModalProps> = ({
             syncStatus: isOnline ? 'saved' : 'offline-pending',
           };
           setIsGenerating(false);
+          setExtractionStatus('');
           onDocumentCreated(workingCopy, false);
           return;
         }
@@ -390,7 +425,7 @@ export const CreateDocumentModal: React.FC<CreateDocumentModalProps> = ({
       const generated = generateDocumentFromNaturalPrompt(
         category,
         effectivePrompt,
-        uploadedFiles,
+        refPayload,
         {
           institution: institution.trim() || undefined,
           department: department.trim() || undefined,
@@ -422,8 +457,9 @@ export const CreateDocumentModal: React.FC<CreateDocumentModalProps> = ({
       };
 
       setIsGenerating(false);
+      setExtractionStatus('');
       onDocumentCreated(newDoc, false);
-    }, 350);
+    }, 400);
   };
 
   // Section 7 Option B: Create Blank Document
@@ -596,17 +632,185 @@ export const CreateDocumentModal: React.FC<CreateDocumentModalProps> = ({
             gap: '16px',
           }}
         >
-          {/* Workflow Toggle: New Document vs Continue Existing */}
-          <div
-            style={{
-              display: 'grid',
-              gridTemplateColumns: '1fr 1fr',
-              border: '1px solid var(--border-stone)',
-              backgroundColor: 'var(--bg-stone)',
-              padding: '3px',
-              gap: '4px',
-            }}
-          >
+          {/* Section 1: Mandatory Image-to-Document AI Conversion */}
+          {category === 'image-to-notes' ? (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+              {/* Task Header & Context */}
+              <div
+                style={{
+                  padding: '14px 16px',
+                  backgroundColor: 'rgba(20, 71, 230, 0.05)',
+                  border: '1px solid rgba(20, 71, 230, 0.25)',
+                  borderRadius: '6px',
+                  display: 'flex',
+                  alignItems: 'flex-start',
+                  gap: '12px',
+                }}
+              >
+                <Sparkles size={20} color="var(--accent-blue)" style={{ flexShrink: 0, marginTop: '2px' }} />
+                <div>
+                  <div style={{ fontSize: '13.5px', fontWeight: 700, color: 'var(--ink-navy)' }}>
+                    Mandatory AI Image-to-Document Conversion
+                  </div>
+                  <div style={{ fontSize: '12px', color: 'var(--ink-muted)', marginTop: '3px', lineHeight: 1.5 }}>
+                    Image conversion always uses AI image recognition. The AI model extracts printed text, legible handwritten notes, headings, bulleted lists, and reconstructs structured HTML tables directly into an editable workspace document.
+                  </div>
+                </div>
+              </div>
+
+              {/* Upload Dropzone / Preview Area */}
+              {uploadedFiles.length === 0 ? (
+                <label
+                  style={{
+                    border: '2px dashed var(--accent-blue)',
+                    backgroundColor: 'rgba(20, 71, 230, 0.02)',
+                    borderRadius: '8px',
+                    padding: '42px 24px',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    gap: '12px',
+                    cursor: 'pointer',
+                    textAlign: 'center',
+                    transition: 'all 0.2s ease',
+                  }}
+                >
+                  <HardDriveUpload size={40} color="var(--accent-blue)" />
+                  <div>
+                    <div style={{ fontSize: '15px', fontWeight: 700, color: 'var(--ink-navy)' }}>
+                      Select or Drop Document Image Here
+                    </div>
+                    <p style={{ fontSize: '12px', color: 'var(--ink-muted)', margin: '4px 0 0' }}>
+                      Supports PNG, JPG, JPEG, WEBP — Lecture notes, textbook scans, handwritten summaries, whiteboard diagrams & tables
+                    </p>
+                  </div>
+                  <span
+                    className="btn-ed-primary"
+                    style={{ padding: '8px 18px', fontSize: '12px', pointerEvents: 'none' }}
+                  >
+                    Browse Device
+                  </span>
+                  <input
+                    type="file"
+                    accept="image/*"
+                    onChange={handleFileUpload}
+                    style={{ display: 'none' }}
+                  />
+                </label>
+              ) : (
+                <div
+                  style={{
+                    border: '1px solid var(--border-stone)',
+                    borderRadius: '8px',
+                    backgroundColor: 'var(--bg-stone)',
+                    padding: '16px',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: '14px',
+                  }}
+                >
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                    <span style={{ fontSize: '12.5px', fontWeight: 700, color: 'var(--ink-navy)' }}>
+                      Selected Image for Reconstruction:
+                    </span>
+                    <label
+                      style={{
+                        fontSize: '11.5px',
+                        color: 'var(--accent-blue)',
+                        cursor: 'pointer',
+                        textDecoration: 'underline',
+                        fontWeight: 600,
+                      }}
+                    >
+                      Choose Different Image
+                      <input
+                        type="file"
+                        accept="image/*"
+                        onChange={handleFileUpload}
+                        style={{ display: 'none' }}
+                      />
+                    </label>
+                  </div>
+
+                  {/* Immediate Thumbnail Preview & Card */}
+                  <AIAttachmentsPreview
+                    attachments={uploadedFiles}
+                    onRemove={(id) => setUploadedFiles((prev) => prev.filter((f) => f.id !== id))}
+                  />
+
+                  {/* Optional extra prompt */}
+                  <div>
+                    <label className="ed-field-label" style={{ fontSize: '11.5px', marginBottom: '4px' }}>
+                      Additional Extraction Guidance (Optional)
+                    </label>
+                    <textarea
+                      value={prompt}
+                      onChange={(e) => setPrompt(e.target.value)}
+                      placeholder="e.g. Focus on the mathematical derivations, preserve table headers, or summarize key takeaways..."
+                      rows={2}
+                      className="ed-input"
+                      style={{ width: '100%', resize: 'none', fontSize: '12.5px' }}
+                    />
+                  </div>
+
+                  {/* Progressive Loading & Shimmer */}
+                  {isGenerating && (
+                    <div
+                      style={{
+                        padding: '12px 16px',
+                        backgroundColor: 'rgba(20, 71, 230, 0.08)',
+                        border: '1px solid rgba(20, 71, 230, 0.3)',
+                        borderRadius: '6px',
+                        fontSize: '12.5px',
+                        color: 'var(--accent-blue)',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '10px',
+                      }}
+                    >
+                      <Sparkles size={16} className="animate-spin" />
+                      <span style={{ fontWeight: 600 }}>
+                        {extractionStatus || 'Processing image with AI vision OCR engine...'}
+                      </span>
+                    </div>
+                  )}
+
+                  {/* Conversion Button */}
+                  <button
+                    type="button"
+                    disabled={isGenerating || uploadedFiles.length === 0}
+                    onClick={handleGenerate}
+                    className="btn-ed-primary"
+                    style={{
+                      padding: '11px 20px',
+                      fontSize: '13px',
+                      fontWeight: 700,
+                      gap: '8px',
+                      justifyContent: 'center',
+                      display: 'flex',
+                      alignItems: 'center',
+                    }}
+                  >
+                    <Sparkles size={15} />
+                    <span>{isGenerating ? 'Converting to Document...' : 'Convert Image to Document with AI'}</span>
+                  </button>
+                </div>
+              )}
+            </div>
+          ) : (
+            <>
+              {/* Workflow Toggle: New Document vs Continue Existing */}
+              <div
+                style={{
+                  display: 'grid',
+                  gridTemplateColumns: '1fr 1fr',
+                  border: '1px solid var(--border-stone)',
+                  backgroundColor: 'var(--bg-stone)',
+                  padding: '3px',
+                  gap: '4px',
+                }}
+              >
             <button
               type="button"
               onClick={() => setWorkflowMode('new')}
@@ -1050,54 +1254,21 @@ export const CreateDocumentModal: React.FC<CreateDocumentModalProps> = ({
                   }}
                 />
 
-                {/* Section 5: Attached Local Files & Workspace References */}
+                {/* Section 5: Attached Local Files & Workspace References Preview */}
                 {uploadedFiles.length > 0 && (
                   <div
                     style={{
-                      padding: '6px 14px',
-                      display: 'flex',
-                      flexWrap: 'wrap',
-                      gap: '6px',
+                      padding: '8px 14px',
                       borderTop: '1px solid var(--border-ivory)',
                       backgroundColor: 'var(--bg-stone)',
                     }}
                   >
-                    {uploadedFiles.map((file, idx) => (
-                      <div
-                        key={idx}
-                        style={{
-                          display: 'inline-flex',
-                          alignItems: 'center',
-                          gap: '6px',
-                          padding: '3px 8px',
-                          backgroundColor: 'var(--bg-ivory)',
-                          border: '1px solid var(--border-stone)',
-                          fontSize: '11px',
-                          color: 'var(--ink-navy)',
-                        }}
-                      >
-                        <FileText size={12} color="var(--accent-blue)" />
-                        <span>{file.name}</span>
-                        <button
-                          type="button"
-                          onClick={() =>
-                            setUploadedFiles((prev) =>
-                              prev.filter((_, i) => i !== idx)
-                            )
-                          }
-                          style={{
-                            background: 'none',
-                            border: 'none',
-                            cursor: 'pointer',
-                            color: 'var(--ink-muted)',
-                            display: 'flex',
-                          }}
-                          title="Remove reference"
-                        >
-                          <X size={11} />
-                        </button>
-                      </div>
-                    ))}
+                    <AIAttachmentsPreview
+                      attachments={uploadedFiles}
+                      onRemove={(id) =>
+                        setUploadedFiles((prev) => prev.filter((f) => f.id !== id))
+                      }
+                    />
                   </div>
                 )}
 
@@ -1408,6 +1579,8 @@ export const CreateDocumentModal: React.FC<CreateDocumentModalProps> = ({
                 </button>
               </div>
             </div>
+          )}
+            </>
           )}
         </div>
 

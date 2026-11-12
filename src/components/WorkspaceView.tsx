@@ -66,6 +66,8 @@ import {
   ShapeType,
   SourceReference,
   SyncStatus,
+  AIAttachment,
+  PageFrameStyleId,
 } from '../types';
 import {
   getCurrentFormattedDate,
@@ -93,6 +95,10 @@ import {
   useVoiceToText,
 } from './WorkspaceAIOverlays';
 import { PageLayoutModal } from './PageLayoutModal';
+import { processMultipleFiles } from '../services/fileProcessing';
+import { AIAttachmentsPreview } from './AIAttachmentsPreview';
+import { PageFrameModal } from './PageFrameModal';
+import { PageFrameOverlay } from './PageFrameOverlay';
 
 interface WorkspaceViewProps {
   document: DocumentItem;
@@ -204,22 +210,9 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
   const [showCreditPopover, setShowCreditPopover] = useState(false);
   const [showTopUpModal, setShowTopUpModal] = useState(false);
 
-  // Section 6: In-Editor Cover Page Manager
-  const [showCoverManagerModal, setShowCoverManagerModal] = useState(false);
-  const [coverTargetPageIndex, setCoverTargetPageIndex] = useState<number>(0);
-  const [selectedCoverCategoryFilter, setSelectedCoverCategoryFilter] = useState<'current' | 'all'>('current');
-  const [selectedCoverDesignId, setSelectedCoverDesignId] = useState<string>('cover-assignment-classic');
-  const [coverFormData, setCoverFormData] = useState({
-    title: doc.title || '',
-    course: doc.metadata.course || '',
-    courseCode: doc.metadata.courseCode || '',
-    institution: doc.metadata.institution || '',
-    department: doc.metadata.department || '',
-    studentName: doc.metadata.studentName || '',
-    matricNo: doc.metadata.matricNo || '',
-    lecturerOrSupervisor: doc.metadata.lecturerOrSupervisor || '',
-    submissionDate: doc.metadata.submissionDate || 'NOVEMBER, 2026',
-  });
+  // Section 9: Page Frame Styles Manager (Replaces Cover Page functionality per specification)
+  const [showFrameModal, setShowFrameModal] = useState(false);
+  const [frameTargetPageIndex, setFrameTargetPageIndex] = useState<number>(0);
 
   // Section 9: AI-Controlled Page Grouping Proposal State
   const [pendingGroupingProposal, setPendingGroupingProposal] = useState<{
@@ -321,9 +314,7 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
   >('all');
   const [aiTargetSinglePage, setAiTargetSinglePage] = useState<number>(0);
   const [promptInput, setPromptInput] = useState('');
-  const [aiUploadedRefs, setAiUploadedRefs] = useState<
-    { name: string; extractedText: string }[]
-  >([]);
+  const [aiUploadedRefs, setAiUploadedRefs] = useState<AIAttachment[]>([]);
   const [isAiLoading, setIsAiLoading] = useState(false);
   const [aiProgressMessage, setAiProgressMessage] = useState('');
 
@@ -2144,23 +2135,13 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
     e: React.ChangeEvent<HTMLInputElement>
   ) => {
     const files = Array.from(e.target.files || []);
-    const added: { name: string; extractedText: string }[] = [];
-    for (const file of files) {
-      if (
-        file.type.startsWith('text/') ||
-        file.name.endsWith('.txt') ||
-        file.name.endsWith('.md')
-      ) {
-        const text = await file.text();
-        added.push({ name: file.name, extractedText: text.slice(0, 600) });
-      } else {
-        added.push({
-          name: file.name,
-          extractedText: `Reference context extracted from "${file.name}".`,
-        });
-      }
+    if (files.length === 0) return;
+    try {
+      const processed = await processMultipleFiles(files);
+      setAiUploadedRefs((prev) => [...prev, ...processed]);
+    } catch (err) {
+      console.error('Failed to attach files in Main AI:', err);
     }
-    setAiUploadedRefs((prev) => [...prev, ...added]);
     e.target.value = '';
   };
 
@@ -2240,7 +2221,7 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
 
       // Calculate token usage and deduct credits (Section 12)
       const inputTokenEst = Math.ceil(effectiveQuery.length / 4) +
-        aiUploadedRefs.reduce((acc, r) => acc + Math.ceil(r.extractedText.length / 4), 0);
+        aiUploadedRefs.reduce((acc, r) => acc + Math.ceil((r.extractedText || '').length / 4), 0);
       const outputTokenEst = 750;
       billingManager.reserveAndDeductCredits(
         'Workspace Assistant Generation',
@@ -2280,8 +2261,20 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
         });
       }
 
-      // Requirement 4 & 5: If a new page was requested, append at the BOTTOM of the document
-      if (result.action === 'append_page' || result.newPageHtml) {
+      // Requirement 4 & 5: If multi-page creation was requested, append ALL generated pages
+      if (result.action === 'multi_page_create' && result.newPageHtmls && result.newPageHtmls.length > 0) {
+        const firstNewIdx = nextPages.length;
+        result.newPageHtmls.forEach((html) => {
+          nextPages.push(html);
+        });
+        activePageIdxRef.current = firstNewIdx;
+        setTimeout(() => {
+          const firstNewEl = pageRefs.current[firstNewIdx];
+          if (firstNewEl) {
+            firstNewEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          }
+        }, 100);
+      } else if (result.action === 'append_page' || result.newPageHtml) {
         const newPageHtml = result.newPageHtml || '<p><br/></p>';
         nextPages.push(newPageHtml);
         const newIdx = nextPages.length - 1;
@@ -2295,8 +2288,15 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
         }, 80);
       }
 
-      // Apply any layout or border updates
-      if (result.layoutUpdates) {
+      // Apply decorative page frame style or layout updates
+      if (result.action === 'frame_update' && (result.frameStyle || (result.layoutUpdates as any)?.frameStyle)) {
+        const fStyle = result.frameStyle || (result.layoutUpdates as any)?.frameStyle;
+        setLayout((prev) => ({
+          ...prev,
+          frameStyle: fStyle,
+          borderStyle: fStyle === 'none' ? 'none' : 'solid',
+        }));
+      } else if (result.layoutUpdates) {
         setLayout((prev) => ({
           ...prev,
           ...result.layoutUpdates,
@@ -2309,7 +2309,7 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
       const allCandidateSources = [
         ...aiUploadedRefs.map((r) => ({
           name: r.name,
-          extractedText: r.extractedText,
+          extractedText: r.extractedText || '',
           type: 'upload',
         })),
       ];
@@ -2381,45 +2381,42 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
     setPendingGroupingProposal(null);
   };
 
-  // Section 6: Apply In-Editor Cover Page Design
-  const handleApplyCoverPage = () => {
-    const design =
-      COVER_PAGE_DESIGNS.find((d) => d.id === selectedCoverDesignId) ||
-      COVER_PAGE_DESIGNS[0];
-    const generatedHtml = design.renderHtml(
-      coverFormData.title || title,
-      {
-        course: coverFormData.course,
-        courseCode: coverFormData.courseCode,
-        institution: coverFormData.institution,
-        department: coverFormData.department,
-        studentName: coverFormData.studentName,
-        matricNo: coverFormData.matricNo,
-        lecturerOrSupervisor: coverFormData.lecturerOrSupervisor,
-        submissionDate: coverFormData.submissionDate,
-      }
-    );
-
-    const nextPages = [...pages];
-    nextPages[coverTargetPageIndex] = generatedHtml;
-    setPages(nextPages);
-    if (pageRefs.current[coverTargetPageIndex]) {
-      pageRefs.current[coverTargetPageIndex]!.innerHTML = generatedHtml;
+  // Section 9: Apply Decorative Page Frame Styles (Non-destructive, applies directly to margins)
+  const handleApplyFrame = (settings: {
+    frameStyle: PageFrameStyleId;
+    borderColor: string;
+    borderWidthPx: number;
+    borderInsetMm: number;
+    applyToAll: boolean;
+  }) => {
+    const updatedLayout = { ...layout };
+    if (settings.applyToAll) {
+      updatedLayout.frameStyle = settings.frameStyle;
+      updatedLayout.borderColor = settings.borderColor;
+      updatedLayout.borderWidthPx = settings.borderWidthPx;
+      updatedLayout.borderInsetMm = settings.borderInsetMm;
+      updatedLayout.borderStyle = settings.frameStyle === 'none' ? 'none' : 'solid';
+      updatedLayout.sectionBorders = {};
+    } else {
+      const sectionBorders = { ...(updatedLayout.sectionBorders || {}) };
+      sectionBorders[frameTargetPageIndex] = {
+        borderStyle: settings.frameStyle === 'none' ? 'none' : 'solid',
+        borderWidthPx: settings.borderWidthPx,
+        borderColor: settings.borderColor,
+        borderInsetMm: settings.borderInsetMm,
+        frameStyle: settings.frameStyle,
+      };
+      updatedLayout.sectionBorders = sectionBorders;
     }
-
-    const updatedMetadata = {
-      ...doc.metadata,
-      ...coverFormData,
-      coverPageIndex: coverTargetPageIndex,
-    };
+    setLayout(updatedLayout);
     onUpdateDocument({
       ...doc,
-      title: coverFormData.title || title,
-      content: getCombinedCleanHtml(nextPages),
-      metadata: updatedMetadata,
+      metadata: {
+        ...doc.metadata,
+        layout: updatedLayout,
+      },
     });
     setHasUnsavedChanges(true);
-    setShowCoverManagerModal(false);
   };
 
   const selectedDrawingObj =
@@ -4887,34 +4884,49 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
                   }", Georgia, serif`,
                 }}
               >
-                {/* Section 6: Inset Decorative Page Border */}
+                {/* Section 9: Decorative Page Frame Overlay (Non-destructive, applies to margins) */}
                 {(() => {
                   const secBorder = layout.sectionBorders?.[pageIdx];
-                  const borderStyle = secBorder ? secBorder.borderStyle : layout.borderStyle;
-                  const borderWidthPx = secBorder ? secBorder.borderWidthPx : layout.borderWidthPx;
-                  const borderColor = secBorder ? secBorder.borderColor : layout.borderColor;
+                  const frameStyle: PageFrameStyleId =
+                    secBorder?.frameStyle || (layout as any).frameStyle || 'none';
+                  const borderWidthPx = secBorder ? secBorder.borderWidthPx : layout.borderWidthPx || 2;
+                  const borderColor = secBorder ? secBorder.borderColor : layout.borderColor || '#1E293B';
                   const borderInsetMm = secBorder?.borderInsetMm ?? layout.borderInsetMm ?? 10;
-                  const borderInsetPx = Math.round(borderInsetMm * 3.7795);
+                  const borderStyle = secBorder ? secBorder.borderStyle : layout.borderStyle;
 
-                  if (!borderStyle || borderStyle === 'none') {
-                    return null;
+                  // Render SVG / CSS frame overlay if frameStyle is set
+                  if (frameStyle && frameStyle !== 'none') {
+                    return (
+                      <PageFrameOverlay
+                        frameStyle={frameStyle}
+                        borderColor={borderColor}
+                        borderWidthPx={borderWidthPx}
+                        insetMm={borderInsetMm}
+                      />
+                    );
                   }
 
-                  return (
-                    <div
-                      className="doc-page-decorative-border"
-                      style={{
-                        position: 'absolute',
-                        top: `${borderInsetPx}px`,
-                        left: `${borderInsetPx}px`,
-                        right: `${borderInsetPx}px`,
-                        bottom: `${borderInsetPx}px`,
-                        border: `${borderWidthPx}px ${borderStyle} ${borderColor}`,
-                        pointerEvents: 'none',
-                        zIndex: 2,
-                      }}
-                    />
-                  );
+                  // Fallback for basic borders if borderStyle is not 'none'
+                  if (borderStyle && borderStyle !== 'none') {
+                    const borderInsetPx = Math.round(borderInsetMm * 3.7795);
+                    return (
+                      <div
+                        className="doc-page-decorative-border"
+                        style={{
+                          position: 'absolute',
+                          top: `${borderInsetPx}px`,
+                          left: `${borderInsetPx}px`,
+                          right: `${borderInsetPx}px`,
+                          bottom: `${borderInsetPx}px`,
+                          border: `${borderWidthPx}px ${borderStyle} ${borderColor}`,
+                          pointerEvents: 'none',
+                          zIndex: 2,
+                        }}
+                      />
+                    );
+                  }
+
+                  return null;
                 })()}
 
                 {/* Page Running Header + Dedicated Page-Level AI Icon (Requirement 5) */}
@@ -4945,61 +4957,27 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
                       flexWrap: 'wrap',
                     }}
                   >
-                    {/* Section 6: In-Editor Cover Page Designation & Manager */}
-                    {doc.metadata.coverPageIndex === pageIdx ? (
-                      <div className="no-print" style={{ display: 'inline-flex', alignItems: 'center', gap: '3px' }}>
-                        <span
-                          style={{
-                            fontFamily: 'var(--font-mono)',
-                            fontSize: '8.5px',
-                            backgroundColor: '#DCFCE7',
-                            color: '#15803D',
-                            border: '1px solid #86EFAC',
-                            padding: '1px 6px',
-                            fontWeight: 700,
-                          }}
-                        >
-                          ★ Cover Page
-                        </span>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setCoverTargetPageIndex(pageIdx);
-                            setShowCoverManagerModal(true);
-                          }}
-                          className="btn-ed-subtle"
-                          style={{ padding: '1px 5px', fontSize: '8.5px', height: '18px' }}
-                        >
-                          Customize
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            const updatedMeta = { ...doc.metadata, coverPageIndex: undefined };
-                            onUpdateDocument({ ...doc, metadata: updatedMeta });
-                            setHasUnsavedChanges(true);
-                          }}
-                          className="btn-ed-subtle"
-                          style={{ padding: '1px 5px', fontSize: '8.5px', height: '18px', color: '#DC2626' }}
-                          title="Remove cover page status"
-                        >
-                          Remove
-                        </button>
-                      </div>
-                    ) : (
-                      <button
-                        type="button"
-                        className="no-print btn-ed-subtle"
-                        onClick={() => {
-                          setCoverTargetPageIndex(pageIdx);
-                          setShowCoverManagerModal(true);
-                        }}
-                        style={{ padding: '1px 6px', fontSize: '8.5px', height: '18px' }}
-                        title="Designate and customize this page as the cover page"
-                      >
-                        + Set as Cover
-                      </button>
-                    )}
+                    {/* Section 9: Page Frame Selector Button (Replaces Cover Page per Specification) */}
+                    <button
+                      type="button"
+                      className="no-print btn-ed-subtle"
+                      onClick={() => {
+                        setFrameTargetPageIndex(pageIdx);
+                        setShowFrameModal(true);
+                      }}
+                      style={{
+                        padding: '1px 7px',
+                        fontSize: '8.5px',
+                        height: '18px',
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: '4px',
+                      }}
+                      title="Apply decorative frame to page margins without modifying page content"
+                    >
+                      <span>🖼️</span>
+                      <span>Page Frame</span>
+                    </button>
 
                     {belongingGroups.map((g) => (
                       <span
@@ -5962,46 +5940,13 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
                   }}
                 />
 
-                {/* Attached Reference Documents & Images inside Main AI Assistant (Requirement 7) */}
+                {/* Attached Reference Documents & Images inside Main AI Assistant (Requirement 2) */}
                 {aiUploadedRefs.length > 0 && (
-                  <div
-                    style={{ display: 'flex', flexWrap: 'wrap', gap: '4px' }}
-                  >
-                    {aiUploadedRefs.map((att, idx) => (
-                      <span
-                        key={idx}
-                        style={{
-                          display: 'inline-flex',
-                          alignItems: 'center',
-                          gap: '4px',
-                          padding: '2px 6px',
-                          backgroundColor: 'var(--bg-stone)',
-                          border: '1px solid var(--border-stone)',
-                          fontSize: '10.5px',
-                          color: 'var(--ink-navy)',
-                        }}
-                      >
-                        <FileText size={10} color="var(--accent-blue)" />
-                        <span>{att.name}</span>
-                        <button
-                          type="button"
-                          onClick={() =>
-                            setAiUploadedRefs((prev) =>
-                              prev.filter((_, i) => i !== idx)
-                            )
-                          }
-                          style={{
-                            background: 'none',
-                            border: 'none',
-                            cursor: 'pointer',
-                            color: 'var(--ink-muted)',
-                          }}
-                        >
-                          ×
-                        </button>
-                      </span>
-                    ))}
-                  </div>
+                  <AIAttachmentsPreview
+                    compact
+                    attachments={aiUploadedRefs}
+                    onRemove={(id) => setAiUploadedRefs((prev) => prev.filter((r) => r.id !== id))}
+                  />
                 )}
 
                 <div
@@ -6498,306 +6443,33 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
       )}
 
       {/* =====================================================================
-          SECTION 6: IN-EDITOR COVER PAGE MANAGER MODAL
+          SECTION 9: PAGE FRAME STYLES MODAL (REPLACES COVER PAGE PER SPECIFICATION)
       ===================================================================== */}
-      {showCoverManagerModal && (
-        <div className="nc-modal-backdrop no-print" style={{ zIndex: 9999 }}>
-          <div
-            className="nc-modal-dialog"
-            style={{ maxWidth: '820px', padding: 0, maxHeight: '90vh', display: 'flex', flexDirection: 'column' }}
-          >
-            <div
-              style={{
-                padding: '16px 20px',
-                borderBottom: '1px solid var(--border-ivory)',
-                backgroundColor: 'var(--bg-ivory)',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'space-between',
-              }}
-            >
-              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                <LayoutTemplate size={18} color="var(--accent-blue)" />
-                <h3
-                  style={{
-                    margin: 0,
-                    fontSize: '16px',
-                    fontWeight: 700,
-                    color: 'var(--ink-navy)',
-                  }}
-                >
-                  In-Editor Cover Page Manager (Page {coverTargetPageIndex + 1})
-                </h3>
-              </div>
-              <button
-                type="button"
-                onClick={() => setShowCoverManagerModal(false)}
-                className="btn-ed-subtle"
-                style={{ padding: '4px' }}
-              >
-                <X size={14} />
-              </button>
-            </div>
-
-            <div
-              style={{
-                padding: '20px',
-                overflowY: 'auto',
-                display: 'flex',
-                flexDirection: 'column',
-                gap: '20px',
-              }}
-            >
-              {/* Category Filter */}
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                <div style={{ fontSize: '13px', color: 'var(--ink-muted)' }}>
-                  Choose a style and customize the fields to format this page as your official cover.
-                </div>
-                <div style={{ display: 'flex', gap: '6px' }}>
-                  <button
-                    type="button"
-                    onClick={() => setSelectedCoverCategoryFilter('current')}
-                    className={
-                      selectedCoverCategoryFilter === 'current'
-                        ? 'btn-ed-primary'
-                        : 'btn-ed-subtle'
-                    }
-                    style={{ padding: '4px 10px', fontSize: '11px' }}
-                  >
-                    {doc.category.toUpperCase()} Designs
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setSelectedCoverCategoryFilter('all')}
-                    className={
-                      selectedCoverCategoryFilter === 'all'
-                        ? 'btn-ed-primary'
-                        : 'btn-ed-subtle'
-                    }
-                    style={{ padding: '4px 10px', fontSize: '11px' }}
-                  >
-                    All Styles
-                  </button>
-                </div>
-              </div>
-
-              {/* Cover Designs Grid */}
-              <div
-                style={{
-                  display: 'grid',
-                  gridTemplateColumns: 'repeat(auto-fit, minmax(210px, 1fr))',
-                  gap: '12px',
-                }}
-              >
-                {COVER_PAGE_DESIGNS.filter(
-                  (d) =>
-                    selectedCoverCategoryFilter === 'all' ||
-                    d.category === 'all' ||
-                    d.category === doc.category
-                ).map((design) => {
-                  const isSelected = selectedCoverDesignId === design.id;
-                  return (
-                    <div
-                      key={design.id}
-                      onClick={() => setSelectedCoverDesignId(design.id)}
-                      style={{
-                        border: isSelected
-                          ? '2px solid var(--accent-blue)'
-                          : '1px solid var(--border-stone)',
-                        backgroundColor: design.previewBg || '#F8FAFC',
-                        padding: '14px',
-                        cursor: 'pointer',
-                        display: 'flex',
-                        flexDirection: 'column',
-                        justifyContent: 'space-between',
-                        minHeight: '130px',
-                      }}
-                    >
-                      <div>
-                        <div style={{ fontWeight: 700, fontSize: '13px', color: '#0D1B4C' }}>
-                          {design.name}
-                        </div>
-                        <div
-                          style={{
-                            fontSize: '11px',
-                            color: '#475569',
-                            marginTop: '4px',
-                            lineHeight: 1.35,
-                          }}
-                        >
-                          {design.description}
-                        </div>
-                      </div>
-
-                      <div
-                        style={{
-                          marginTop: '10px',
-                          display: 'flex',
-                          alignItems: 'center',
-                          justifyContent: 'space-between',
-                        }}
-                      >
-                        <span
-                          style={{
-                            fontFamily: 'var(--font-mono)',
-                            fontSize: '8.5px',
-                            textTransform: 'uppercase',
-                            color: '#64748B',
-                          }}
-                        >
-                          {design.category}
-                        </span>
-                        {isSelected && (
-                          <span
-                            style={{
-                              fontSize: '10px',
-                              fontWeight: 700,
-                              color: 'var(--accent-blue)',
-                            }}
-                          >
-                            ✓ Selected
-                          </span>
-                        )}
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-
-              {/* Live Form Metadata Customization */}
-              <div
-                style={{
-                  borderTop: '1px solid var(--border-ivory)',
-                  paddingTop: '16px',
-                  display: 'flex',
-                  flexDirection: 'column',
-                  gap: '12px',
-                }}
-              >
-                <div style={{ fontWeight: 700, fontSize: '14px', color: 'var(--ink-navy)' }}>
-                  Cover Page Details:
-                </div>
-
-                <div className="nc-grid-2col">
-                  <div>
-                    <label className="ed-field-label">Document / Assignment Title</label>
-                    <input
-                      type="text"
-                      value={coverFormData.title}
-                      onChange={(e) =>
-                        setCoverFormData((p) => ({ ...p, title: e.target.value }))
-                      }
-                      className="ed-input"
-                    />
-                  </div>
-
-                  <div>
-                    <label className="ed-field-label">Institution / University Name</label>
-                    <input
-                      type="text"
-                      value={coverFormData.institution}
-                      onChange={(e) =>
-                        setCoverFormData((p) => ({ ...p, institution: e.target.value }))
-                      }
-                      className="ed-input"
-                    />
-                  </div>
-                </div>
-
-                <div className="nc-grid-2col">
-                  <div>
-                    <label className="ed-field-label">Department / Faculty</label>
-                    <input
-                      type="text"
-                      value={coverFormData.department}
-                      onChange={(e) =>
-                        setCoverFormData((p) => ({ ...p, department: e.target.value }))
-                      }
-                      className="ed-input"
-                    />
-                  </div>
-
-                  <div>
-                    <label className="ed-field-label">Course Title &amp; Code</label>
-                    <input
-                      type="text"
-                      value={coverFormData.course}
-                      onChange={(e) =>
-                        setCoverFormData((p) => ({ ...p, course: e.target.value }))
-                      }
-                      className="ed-input"
-                    />
-                  </div>
-                </div>
-
-                <div className="nc-grid-3col">
-                  <div>
-                    <label className="ed-field-label">Student Name</label>
-                    <input
-                      type="text"
-                      value={coverFormData.studentName}
-                      onChange={(e) =>
-                        setCoverFormData((p) => ({ ...p, studentName: e.target.value }))
-                      }
-                      className="ed-input"
-                    />
-                  </div>
-
-                  <div>
-                    <label className="ed-field-label">Matric Number</label>
-                    <input
-                      type="text"
-                      value={coverFormData.matricNo}
-                      onChange={(e) =>
-                        setCoverFormData((p) => ({ ...p, matricNo: e.target.value }))
-                      }
-                      className="ed-input"
-                    />
-                  </div>
-
-                  <div>
-                    <label className="ed-field-label">Submission Date</label>
-                    <input
-                      type="text"
-                      value={coverFormData.submissionDate}
-                      onChange={(e) =>
-                        setCoverFormData((p) => ({ ...p, submissionDate: e.target.value }))
-                      }
-                      className="ed-input"
-                    />
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            <div
-              style={{
-                padding: '14px 20px',
-                borderTop: '1px solid var(--border-ivory)',
-                backgroundColor: 'var(--bg-stone)',
-                display: 'flex',
-                justifyContent: 'flex-end',
-                gap: '8px',
-              }}
-            >
-              <button
-                type="button"
-                onClick={() => setShowCoverManagerModal(false)}
-                className="btn-ed-subtle"
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                onClick={handleApplyCoverPage}
-                className="btn-ed-primary"
-                style={{ padding: '8px 18px' }}
-              >
-                Apply Cover Page to Page {coverTargetPageIndex + 1}
-              </button>
-            </div>
-          </div>
-        </div>
+      {showFrameModal && (
+        <PageFrameModal
+          pageIndex={frameTargetPageIndex}
+          currentFrameStyle={
+            layout.sectionBorders?.[frameTargetPageIndex]?.frameStyle ||
+            (layout as any).frameStyle ||
+            'none'
+          }
+          currentColor={
+            layout.sectionBorders?.[frameTargetPageIndex]?.borderColor ||
+            layout.borderColor ||
+            '#1E293B'
+          }
+          onApplyFrame={(frameId, color, applyToAll) => {
+            handleApplyFrame({
+              frameStyle: frameId,
+              borderColor: color,
+              borderWidthPx: layout.borderWidthPx || 2,
+              borderInsetMm: layout.borderInsetMm ?? 10,
+              applyToAll,
+            });
+            setShowFrameModal(false);
+          }}
+          onClose={() => setShowFrameModal(false)}
+        />
       )}
     </div>
   );

@@ -27,6 +27,30 @@ export interface SourceReference {
   verified?: boolean;
 }
 
+export interface AIAttachment {
+  id: string;
+  name: string;
+  type: 'image' | 'document';
+  fileType: string; // e.g. '.pdf', '.docx', '.png', '.jpg', '.txt'
+  sizeFormatted: string;
+  dataUrl?: string; // base64 Data URL for thumbnail preview and multimodal vision
+  extractedText: string;
+  pageCount?: number;
+  rawFile?: File;
+}
+
+export type PageFrameStyleId =
+  | 'none'
+  | 'minimal-dotted'
+  | 'decorative-corner'
+  | 'classic-border'
+  | 'modern-geometric'
+  | 'floral-ornamental'
+  | 'simple-double'
+  | 'executive-solid'
+  | 'creative-artistic'
+  | 'double-line-inset';
+
 export interface AIMessage {
   id: string;
   role: 'user' | 'assistant';
@@ -60,6 +84,7 @@ export interface PageLayoutSettings {
   borderWidthPx: number;
   borderColor: string;
   borderInsetMm?: number; // distance from page edges
+  frameStyle?: PageFrameStyleId;
   headerSpacingPx: number;
   footerSpacingPx: number;
   sectionOrientations?: Record<number, 'portrait' | 'landscape'>;
@@ -71,6 +96,7 @@ export interface PageLayoutSettings {
       borderWidthPx: number;
       borderColor: string;
       borderInsetMm?: number;
+      frameStyle?: PageFrameStyleId;
     }
   >;
 }
