@@ -30,8 +30,10 @@ import {
   CATEGORY_PAGE_COPY,
   formatDisplayDate,
   generateDocumentFromNaturalPrompt,
+  generateDocumentFromNaturalPromptAsync,
   getCurrentFormattedDate,
   modifyExistingDocumentWithAI,
+  modifyExistingDocumentWithAIAsync,
   generateDocumentFromImageAI,
 } from '../services/aiGenerator';
 import { openDocumentFromComputerFile } from '../services/exportService';
@@ -381,85 +383,91 @@ export const CreateDocumentModal: React.FC<CreateDocumentModalProps> = ({
       extractedText: f.extractedText || `Reference file: ${f.name} (${f.fileType.toUpperCase()})`,
     }));
 
-    setTimeout(() => {
-      if (workflowMode === 'existing' && selectedExistingDoc) {
-        const updatedResult = modifyExistingDocumentWithAI(
-          selectedExistingDoc,
+    setTimeout(async () => {
+      try {
+        if (workflowMode === 'existing' && selectedExistingDoc) {
+          const updatedResult = await modifyExistingDocumentWithAIAsync(
+            selectedExistingDoc,
+            effectivePrompt,
+            uploadedFiles
+          );
+
+          if (preserveMode === 'overwrite' && !importedComputerDoc) {
+            const updatedExisting: DocumentItem = {
+              ...selectedExistingDoc,
+              content: updatedResult.content,
+              updatedAt: todayFormatted,
+              syncStatus: isOnline ? 'saved' : 'offline-pending',
+            };
+            setIsGenerating(false);
+            setExtractionStatus('');
+            onDocumentCreated(updatedExisting, true);
+            return;
+          } else {
+            const workingCopy: DocumentItem = {
+              ...selectedExistingDoc,
+              id: `doc-${Date.now()}`,
+              title: importedComputerDoc
+                ? selectedExistingDoc.title
+                : `${selectedExistingDoc.title} (AI Updated)`,
+              category,
+              content: updatedResult.content,
+              createdAt: todayFormatted,
+              updatedAt: todayFormatted,
+              status: 'Draft',
+              syncStatus: isOnline ? 'saved' : 'offline-pending',
+            };
+            setIsGenerating(false);
+            setExtractionStatus('');
+            onDocumentCreated(workingCopy, false);
+            return;
+          }
+        }
+
+        // New Document with AI
+        const generated = await generateDocumentFromNaturalPromptAsync(
+          category,
           effectivePrompt,
-          refPayload
+          uploadedFiles,
+          {
+            institution: institution.trim() || undefined,
+            department: department.trim() || undefined,
+            courseCode: courseCode.trim() || undefined,
+            studentName: studentName.trim() || undefined,
+            lecturer: lecturer.trim() || undefined,
+            referencingStyle,
+            wordCount: wordCount.trim() || undefined,
+          }
         );
 
-        if (preserveMode === 'overwrite' && !importedComputerDoc) {
-          const updatedExisting: DocumentItem = {
-            ...selectedExistingDoc,
-            content: updatedResult.content,
-            updatedAt: todayFormatted,
-            syncStatus: isOnline ? 'saved' : 'offline-pending',
-          };
-          setIsGenerating(false);
-          setExtractionStatus('');
-          onDocumentCreated(updatedExisting, true);
-          return;
-        } else {
-          const workingCopy: DocumentItem = {
-            ...selectedExistingDoc,
-            id: `doc-${Date.now()}`,
-            title: importedComputerDoc
-              ? selectedExistingDoc.title
-              : `${selectedExistingDoc.title} (AI Updated)`,
-            category,
-            content: updatedResult.content,
-            createdAt: todayFormatted,
-            updatedAt: todayFormatted,
-            status: 'Draft',
-            syncStatus: isOnline ? 'saved' : 'offline-pending',
-          };
-          setIsGenerating(false);
-          setExtractionStatus('');
-          onDocumentCreated(workingCopy, false);
-          return;
-        }
+        const newDoc: DocumentItem = {
+          id: `doc-${Date.now()}`,
+          title: generated.title,
+          category,
+          content: generated.content,
+          createdAt: todayFormatted,
+          updatedAt: todayFormatted,
+          status: 'Draft',
+          syncStatus: isOnline ? 'saved' : 'offline-pending',
+          format: 'DOCX',
+          metadata: {
+            ...generated.metadata,
+            layout: DEFAULT_PAGE_LAYOUT,
+            orientation: 'portrait',
+            marginSize: 'normal',
+          },
+          aiHistory: [],
+        };
+
+        setIsGenerating(false);
+        setExtractionStatus('');
+        onDocumentCreated(newDoc, false);
+      } catch (err) {
+        console.error('Document AI generation error:', err);
+        setIsGenerating(false);
+        setExtractionStatus('');
       }
-
-      // New Document with AI
-      const generated = generateDocumentFromNaturalPrompt(
-        category,
-        effectivePrompt,
-        refPayload,
-        {
-          institution: institution.trim() || undefined,
-          department: department.trim() || undefined,
-          courseCode: courseCode.trim() || undefined,
-          studentName: studentName.trim() || undefined,
-          lecturer: lecturer.trim() || undefined,
-          referencingStyle,
-          wordCount: wordCount.trim() || undefined,
-        }
-      );
-
-      const newDoc: DocumentItem = {
-        id: `doc-${Date.now()}`,
-        title: generated.title,
-        category,
-        content: generated.content,
-        createdAt: todayFormatted,
-        updatedAt: todayFormatted,
-        status: 'Draft',
-        syncStatus: isOnline ? 'saved' : 'offline-pending',
-        format: 'DOCX',
-        metadata: {
-          ...generated.metadata,
-          layout: DEFAULT_PAGE_LAYOUT,
-          orientation: 'portrait',
-          marginSize: 'normal',
-        },
-        aiHistory: [],
-      };
-
-      setIsGenerating(false);
-      setExtractionStatus('');
-      onDocumentCreated(newDoc, false);
-    }, 400);
+    }, 200);
   };
 
   // Section 7 Option B: Create Blank Document

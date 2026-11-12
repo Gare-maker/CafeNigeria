@@ -5,9 +5,34 @@ import {
   DocumentItem,
   PageFrameStyleId,
   PageGroup,
+  PageLayoutSettings,
   SourceReference,
 } from '../types';
 import { billingManager } from './billingService';
+
+const DEFAULT_PAGE_LAYOUT: PageLayoutSettings = {
+  pageSize: 'A4',
+  customWidthMm: 210,
+  customHeightMm: 297,
+  orientation: 'portrait',
+  marginPreset: 'normal',
+  marginTopMm: 25,
+  marginBottomMm: 25,
+  marginLeftMm: 25,
+  marginRightMm: 25,
+  columns: 1,
+  columnGapPx: 28,
+  lineSpacing: '1.75',
+  pageBackground: '#FFFFFF',
+  borderStyle: 'none',
+  borderWidthPx: 1,
+  borderColor: '#0A194E',
+  borderInsetMm: 10,
+  sectionBorders: {},
+  headerSpacingPx: 18,
+  footerSpacingPx: 24,
+  sectionOrientations: {},
+};
 
 const MONTH_NAMES = [
   'January',
@@ -1548,16 +1573,32 @@ export async function callGeminiApi(
   systemInstruction: string,
   userPrompt: string,
   modelName: string = 'gemini-1.5-flash',
-  attachments?: AIAttachment[]
+  attachments?: AIAttachment[],
+  history?: { role: 'user' | 'model'; text: string }[],
+  jsonMode: boolean = false
 ): Promise<{ text: string; error?: string } | null> {
   const apiKey = getGeminiApiKey();
   if (!apiKey) return null;
 
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${apiKey}`;
 
-  const parts: any[] = [{ text: userPrompt }];
+  const contents: any[] = [];
 
-  // Multimodal Vision Support (Section 1 & 2): Include image inlineData
+  // Multi-Turn Context Retention: Include conversation history
+  if (history && history.length > 0) {
+    for (const h of history) {
+      if (h.text && h.text.trim()) {
+        contents.push({
+          role: h.role === 'model' ? 'model' : 'user',
+          parts: [{ text: h.text.trim() }],
+        });
+      }
+    }
+  }
+
+  const currentParts: any[] = [{ text: userPrompt }];
+
+  // Multimodal Vision Support: Include image inlineData
   if (attachments && attachments.length > 0) {
     for (const att of attachments) {
       if (att.type === 'image' && att.dataUrl) {
@@ -1566,7 +1607,7 @@ export async function callGeminiApi(
           const mimeMatch = att.dataUrl.match(/data:([^;]+);base64/);
           const mimeType = mimeMatch ? mimeMatch[1] : 'image/jpeg';
           const base64Data = att.dataUrl.slice(commaIdx + 1);
-          parts.push({
+          currentParts.push({
             inlineData: {
               mimeType,
               data: base64Data,
@@ -1577,21 +1618,30 @@ export async function callGeminiApi(
     }
   }
 
+  contents.push({
+    role: 'user',
+    parts: currentParts,
+  });
+
+  const generationConfig: any = {
+    temperature: 0.35,
+    maxOutputTokens: 8192,
+  };
+
+  if (jsonMode) {
+    generationConfig.responseMimeType = 'application/json';
+  }
+
   const body = {
     system_instruction: {
       parts: [{ text: systemInstruction }],
     },
-    contents: [
-      {
-        role: 'user',
-        parts,
-      },
-    ],
-    generationConfig: {
-      temperature: 0.2,
-      maxOutputTokens: 3500,
-    },
+    contents,
+    generationConfig,
   };
+
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 55000);
 
   try {
     const res = await fetch(url, {
@@ -1600,7 +1650,9 @@ export async function callGeminiApi(
         'Content-Type': 'application/json',
       },
       body: JSON.stringify(body),
+      signal: controller.signal,
     });
+    clearTimeout(timeoutId);
 
     if (!res.ok) {
       const errJson = await res.json().catch(() => null);
@@ -1616,6 +1668,7 @@ export async function callGeminiApi(
     const text = candidate?.content?.parts?.map((p: any) => p.text).join('') || '';
     return { text };
   } catch (err: any) {
+    clearTimeout(timeoutId);
     console.warn('Gemini API fetch error:', err);
     return { text: '', error: err?.message || 'Network error connecting to Gemini API' };
   }
@@ -1999,6 +2052,7 @@ export function runWorkspaceAIPrompt(
 
 /**
  * Async Runner that connects to Gemini 1.5 Flash when an API Key is available,
+ * supporting full-document context, multi-turn chat history, multi-page editing,
  * and falls back to the robust offline local NLP engine if unavailable or offline.
  */
 export async function runWorkspaceAIPromptAsync(
@@ -2015,7 +2069,8 @@ export async function runWorkspaceAIPromptAsync(
     docId?: string;
     type?: string;
   }[] = [],
-  attachments?: AIAttachment[]
+  attachments?: AIAttachment[],
+  conversationHistory?: { role: 'user' | 'model'; text: string }[]
 ): Promise<WorkspaceAIResult> {
   const apiKey = getGeminiApiKey();
 
@@ -2026,57 +2081,86 @@ export async function runWorkspaceAIPromptAsync(
       const targetIdx = explicitPageIndices?.[0] ?? Math.max(0, currentPages.length - 1);
       const activeHtml = currentPages[targetIdx] || '';
 
+      const fullDocumentText = currentPages
+        .map(
+          (pHtml, idx) =>
+            `=== PAGE ${idx + 1} ${idx === targetIdx ? '(ACTIVE TARGET PAGE)' : ''} ===\n${pHtml}`
+        )
+        .join('\n\n');
+
       const systemInstruction = `
 You are the CafeNigeria Document Editor AI Assistant.
-CRITICAL MANDATE - STRICT ACTIVE DOCUMENT ISOLATION:
-You must strictly and exclusively work with the document currently open in the workspace.
-DO NOT reference, search, or combine any external files or other documents from the workspace.
-Document Title: "${doc.title}"
-Category: "${doc.category}"
-Total Pages: ${currentPages.length}
-Target Page: ${targetIdx + 1}
-
-Your task is to execute the user's instruction directly upon the document content.
-If the user requests multi-page content (e.g. "5 pages", "3 pages", "detailed proposal"), provide substantive content across "newPageHtmls" array.
-Return ONLY valid JSON matching this schema:
+CRITICAL DIRECTIVES:
+1. Work directly upon the provided document content.
+2. If the user refers to earlier messages, previous tables, earlier chapters, or revisions, follow their context accurately.
+3. You can update the active page OR multiple pages as required by the instruction.
+4. When modifying an existing page, preserve all other existing headings, paragraphs, and styling unless instructed to alter them.
+5. If the user asks for multi-page output (e.g. "5 pages", "3 pages", "detailed proposal"), provide substantive full-length content in "newPageHtmls".
+6. Return ONLY valid JSON matching this schema:
 {
   "summary": "Clear, concise sentence describing the changes made to the document",
   "action": "content_edit" | "append_page" | "multi_page_create" | "table" | "layout_update" | "border_update" | "frame_update" | "conversation",
   "updatedPageHtml": "Clean HTML string containing the full modified content of the target page",
+  "directPageUpdates": {
+    "0": "Clean HTML string for page 1 if modified",
+    "1": "Clean HTML string for page 2 if modified"
+  },
   "newPageHtml": "Clean HTML string if one new page was requested",
-  "newPageHtmls": ["Clean HTML page 1", "Clean HTML page 2"] (if multiple pages requested),
+  "newPageHtmls": ["Clean HTML page 1", "Clean HTML page 2"],
   "layoutUpdates": {
     "columns": 1 or 2 or 3,
     "borderStyle": "none" | "solid" | "dotted" | "dashed",
     "frameStyle": "minimal-dotted" | "decorative-corner" | "classic-border" | "modern-geometric" | "floral-ornamental" | "simple-double" | "executive-solid" | "creative-artistic" | "none"
   }
 }
-      `.trim();
+`.trim();
 
       const referenceBlock =
         attachments && attachments.length > 0
-          ? `\n\nATTACHED REFERENCE MATERIALS (READ & INTEGRATE CAREFULLY):\n` +
+          ? `\n\n=== ATTACHED REFERENCE MATERIALS (READ & INTEGRATE CAREFULLY) ===\n` +
             attachments.map((a) => `[File: ${a.name} (${a.fileType})]:\n${a.extractedText}`).join('\n\n')
           : '';
 
       const userContent = `
-Document Title: ${doc.title}
-Active Page HTML Content:
-${activeHtml.slice(0, 3500)}
+Document Title: "${doc.title}"
+Category: "${doc.category}"
+Total Pages: ${currentPages.length}
+Target Active Page: Page ${targetIdx + 1}
 
-User Instruction:
-${prompt}${referenceBlock}
-      `.trim();
+=== FULL DOCUMENT CONTENT (ALL PAGES) ===
+${fullDocumentText}
+${referenceBlock}
 
-      const response = await callGeminiApi(systemInstruction, userContent, 'gemini-1.5-flash', attachments);
+=== USER INSTRUCTION ===
+${prompt}
+`.trim();
+
+      const response = await callGeminiApi(
+        systemInstruction,
+        userContent,
+        'gemini-1.5-flash',
+        attachments,
+        conversationHistory,
+        true
+      );
+
       if (response && response.text) {
-        // Strip any markdown code fence wrapper
         const cleanText = response.text.replace(/^```json\s*/i, '').replace(/```\s*$/i, '').trim();
         try {
           const parsed = JSON.parse(cleanText);
           const sources = extractSourceReferences(prompt, uploadedReferences);
           const directPageUpdates: Record<number, string> = {};
-          if (parsed.updatedPageHtml) {
+
+          if (parsed.directPageUpdates && typeof parsed.directPageUpdates === 'object') {
+            Object.entries(parsed.directPageUpdates).forEach(([k, v]) => {
+              const pIdx = parseInt(k, 10);
+              if (!isNaN(pIdx) && typeof v === 'string') {
+                directPageUpdates[pIdx] = v;
+              }
+            });
+          }
+
+          if (parsed.updatedPageHtml && directPageUpdates[targetIdx] === undefined) {
             directPageUpdates[targetIdx] = parsed.updatedPageHtml;
           }
 
@@ -2090,8 +2174,8 @@ ${prompt}${referenceBlock}
 
           return {
             summary: parsed.summary || 'Applied changes directly to active document using Gemini 1.5 Flash.',
-            generatedHtml: parsed.updatedPageHtml || activeHtml,
-            targetPageIndices: [targetIdx],
+            generatedHtml: directPageUpdates[targetIdx] || parsed.updatedPageHtml || activeHtml,
+            targetPageIndices: Object.keys(directPageUpdates).map((i) => parseInt(i, 10)),
             directPageUpdates: Object.keys(directPageUpdates).length > 0 ? directPageUpdates : undefined,
             action: parsed.action || 'content_edit',
             newPageHtml: parsed.newPageHtml,
@@ -2118,6 +2202,287 @@ ${prompt}${referenceBlock}
     explicitPageIndices,
     uploadedReferences
   );
+}
+
+/**
+ * Real Gemini-powered Text Selection AI (Micro-editing, paragraph rewrites, expansion, grammar)
+ */
+export async function runTextLevelAIAsync(
+  selectedText: string,
+  instruction: string,
+  attachments?: AIAttachment[]
+): Promise<{ updatedHtml: string; summary: string }> {
+  const apiKey = getGeminiApiKey();
+  if (apiKey) {
+    try {
+      const systemInstruction = `
+You are an expert Document Editor Assistant specializing in micro-editing and textual precision.
+TASK: Modify the user's selected text according to their instruction (e.g. rewrite, shorten, expand, change tone, correct grammar, format as list or table, etc.).
+RULES:
+1. Return ONLY the modified text/HTML snippet to drop in place of the selected text.
+2. DO NOT include greetings, conversational pleasantries, explanations, or markdown code blocks (\`\`\`html or \`\`\`).
+3. Retain the meaning, factual integrity, and appropriate style suitable for an academic or professional document.
+`.trim();
+
+      const userPrompt = `
+TARGET SELECTED TEXT:
+"${selectedText}"
+
+USER INSTRUCTION:
+"${instruction}"
+`.trim();
+
+      const response = await callGeminiApi(
+        systemInstruction,
+        userPrompt,
+        'gemini-1.5-flash',
+        attachments
+      );
+
+      if (response && response.text) {
+        const clean = response.text.replace(/^```html\s*/i, '').replace(/```\s*$/i, '').trim();
+        if (clean.length > 0) {
+          return {
+            updatedHtml: clean,
+            summary: `Applied "${instruction}" to selected text using Gemini AI.`,
+          };
+        }
+      }
+    } catch (err) {
+      console.warn('Gemini text-level AI failed, falling back to local NLP:', err);
+    }
+  }
+
+  return runTextLevelAI(selectedText, instruction);
+}
+
+/**
+ * Real Gemini-powered Page-Level AI (Table insertion, section additions, styling, data synthesis)
+ */
+export async function runPageLevelAIAsync(
+  currentPageHtml: string,
+  pageIndex: number,
+  instruction: string,
+  docTitle: string,
+  attachments?: AIAttachment[]
+): Promise<{ updatedPageHtml: string; summary: string }> {
+  const apiKey = getGeminiApiKey();
+  if (apiKey) {
+    try {
+      const systemInstruction = `
+You are the CafeNigeria Page Editor AI Assistant.
+Document Title: "${docTitle}"
+Target: Page ${pageIndex + 1}
+TASK: Execute the user's instruction directly upon the target page's content, structure, tables, and headings.
+RULES:
+1. Return ONLY the full clean HTML document content for this page.
+2. DO NOT include markdown code fences (\`\`\`html or \`\`\`) or conversational chat text.
+3. If the user asks for a table, generate an authentic, fully populated HTML <table> with <thead> and <tbody>.
+4. If adding or rewriting sections, preserve all other existing page content and formatting unless instructed to change it.
+`.trim();
+
+      const refBlock =
+        attachments && attachments.length > 0
+          ? `\n\nATTACHED REFERENCE MATERIALS:\n` +
+            attachments.map((a) => `[File: ${a.name}]:\n${a.extractedText}`).join('\n\n')
+          : '';
+
+      const userPrompt = `
+PAGE ${pageIndex + 1} CURRENT HTML CONTENT:
+${currentPageHtml}
+${refBlock}
+
+USER INSTRUCTION:
+${instruction}
+`.trim();
+
+      const response = await callGeminiApi(
+        systemInstruction,
+        userPrompt,
+        'gemini-1.5-flash',
+        attachments
+      );
+
+      if (response && response.text) {
+        const clean = response.text.replace(/^```html\s*/i, '').replace(/```\s*$/i, '').trim();
+        if (clean.length > 20) {
+          return {
+            updatedPageHtml: clean,
+            summary: `Updated Page ${pageIndex + 1} with "${instruction}" using Gemini AI.`,
+          };
+        }
+      }
+    } catch (err) {
+      console.warn('Gemini page-level AI failed, falling back to local NLP:', err);
+    }
+  }
+
+  const refPayload = (attachments || []).map((a) => ({ name: a.name, extractedText: a.extractedText || '' }));
+  return runPageLevelAI(currentPageHtml, pageIndex, instruction, docTitle, refPayload);
+}
+
+/**
+ * Real Gemini-powered Document Generator for Create Modal
+ */
+export async function generateDocumentFromNaturalPromptAsync(
+  category: DocumentCategory,
+  prompt: string,
+  attachments: AIAttachment[] = [],
+  optional: OptionalDetailsInput = {}
+): Promise<{ title: string; content: string; metadata: DocumentItem['metadata'] }> {
+  const apiKey = getGeminiApiKey();
+  const inst = optional.institution || 'University of Lagos (UNILAG)';
+  const dept = optional.department || 'Academic Department';
+  const courseCode = optional.courseCode || 'CSC 401';
+  const student = optional.studentName || 'Student Name';
+  const lecturer = optional.lecturer || 'Lecturer / Supervisor';
+  const refStyle = optional.referencingStyle || 'APA 7th Edition';
+  const wordCount = optional.wordCount || 'Comprehensive multi-page academic document';
+
+  if (apiKey) {
+    try {
+      const systemInstruction = `
+You are the CafeNigeria AI Document Generator.
+TASK: Generate a complete, authoritative, comprehensive professional document tailored specifically to the user's prompt and academic details.
+DOCUMENT SPECIFICATIONS:
+- Category: ${category}
+- Institution: ${inst}
+- Department: ${dept}
+- Course Code: ${courseCode}
+- Student / Author: ${student}
+- Lecturer / Supervisor: ${lecturer}
+- Referencing Style: ${refStyle}
+- Target Length: ${wordCount}
+
+REQUIREMENTS:
+1. Provide substantive, exhaustive, multi-section content (Title, Abstract/Executive Summary, Chapters/Sections, Empirical/Analytical Tables, Discussion, References).
+2. For multi-page structures, insert "<!-- PAGE_BREAK -->" between pages so the editor can paginate properly.
+3. Return ONLY valid JSON matching this schema:
+{
+  "title": "Clear concise document title",
+  "content": "Full complete clean HTML document body with headings, paragraphs, and tables",
+  "summary": "Brief summary of the generated document"
+}
+`.trim();
+
+      const refBlock =
+        attachments.length > 0
+          ? `\n\nATTACHED REFERENCE MATERIALS:\n` +
+            attachments.map((a) => `[File: ${a.name}]:\n${a.extractedText}`).join('\n\n')
+          : '';
+
+      const userPrompt = `
+PROMPT:
+${prompt}
+${refBlock}
+`.trim();
+
+      const response = await callGeminiApi(
+        systemInstruction,
+        userPrompt,
+        'gemini-1.5-flash',
+        attachments,
+        undefined,
+        true
+      );
+
+      if (response && response.text) {
+        const cleanText = response.text.replace(/^```json\s*/i, '').replace(/```\s*$/i, '').trim();
+        const parsed = JSON.parse(cleanText);
+        if (parsed.content && parsed.content.length > 50) {
+          return {
+            title: parsed.title || extractTitleFromPrompt(prompt, category),
+            content: parsed.content,
+            metadata: {
+              institution: inst,
+              department: dept,
+              courseCode: courseCode,
+              studentName: student,
+              lecturerOrSupervisor: lecturer,
+              referencingStyle: refStyle,
+              wordCountTarget: wordCount,
+              fontFamily: 'Times New Roman',
+              showPageNumbers: true,
+              layout: DEFAULT_PAGE_LAYOUT,
+            },
+          };
+        }
+      }
+    } catch (err) {
+      console.warn('Gemini doc generation failed, falling back to local template:', err);
+    }
+  }
+
+  const refPayload = attachments.map((a) => ({ name: a.name, extractedText: a.extractedText || '' }));
+  return generateDocumentFromNaturalPrompt(category, prompt, refPayload, optional);
+}
+
+/**
+ * Real Gemini-powered Document Modification for Existing Files
+ */
+export async function modifyExistingDocumentWithAIAsync(
+  existingDoc: DocumentItem,
+  instruction: string,
+  attachments: AIAttachment[] = []
+): Promise<{ content: string; summary: string }> {
+  const apiKey = getGeminiApiKey();
+  if (apiKey) {
+    try {
+      const systemInstruction = `
+You are the CafeNigeria Document Editor AI.
+TASK: Modify, expand, or restructure the existing document according to the user's instructions.
+CRITICAL DIRECTIVES:
+1. Work directly upon the existing content. Do not discard existing chapters or sections unless asked.
+2. If the user asks to add a table, section, methodology, or conclusion, integrate it seamlessly.
+3. Return ONLY valid JSON matching this schema:
+{
+  "content": "Full updated clean HTML document content",
+  "summary": "Clear, concise sentence describing the modifications made"
+}
+`.trim();
+
+      const refBlock =
+        attachments.length > 0
+          ? `\n\nATTACHED REFERENCE MATERIALS:\n` +
+            attachments.map((a) => `[File: ${a.name}]:\n${a.extractedText}`).join('\n\n')
+          : '';
+
+      const userPrompt = `
+DOCUMENT TITLE: "${existingDoc.title}"
+EXISTING DOCUMENT HTML CONTENT:
+${existingDoc.content}
+
+USER INSTRUCTION:
+${instruction}
+${refBlock}
+`.trim();
+
+      const response = await callGeminiApi(
+        systemInstruction,
+        userPrompt,
+        'gemini-1.5-flash',
+        attachments,
+        undefined,
+        true
+      );
+
+      if (response && response.text) {
+        const cleanText = response.text.replace(/^```json\s*/i, '').replace(/```\s*$/i, '').trim();
+        const parsed = JSON.parse(cleanText);
+        if (parsed.content && parsed.content.length > 20) {
+          return {
+            content: parsed.content,
+            summary: parsed.summary || `Updated "${existingDoc.title}" using Gemini AI.`,
+          };
+        }
+      }
+    } catch (err) {
+      console.warn('Gemini document modification failed, falling back to local template:', err);
+    }
+  }
+
+  const refPayload = attachments.map((a) => ({ name: a.name, extractedText: a.extractedText || '' }));
+  return modifyExistingDocumentWithAI(existingDoc, instruction, refPayload);
 }
 
 /**

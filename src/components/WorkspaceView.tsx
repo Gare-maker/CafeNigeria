@@ -72,9 +72,12 @@ import {
 import {
   getCurrentFormattedDate,
   runPageLevelAI,
+  runPageLevelAIAsync,
   runTextLevelAI,
+  runTextLevelAIAsync,
   runWorkspaceAIPrompt,
   runWorkspaceAIPromptAsync,
+  getGeminiApiKey,
   WorkspaceAIResult,
   extractSourceReferences,
   parseGroupingInstruction,
@@ -1065,72 +1068,98 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
     setHighlightBadgePos(null);
   };
 
-  // Requirement 4: Execute Text-Level AI and replace ONLY the highlighted text
-  const handleExecuteTextLevelAI = (instruction: string) => {
+  // Requirement 4: Execute Real Text-Level AI and replace ONLY the highlighted text
+  const handleExecuteTextLevelAI = async (
+    instruction: string,
+    attachments?: AIAttachment[]
+  ) => {
     if (!highlightedText) return;
-    const result = runTextLevelAI(highlightedText, instruction);
-    const pageEl = pageRefs.current[highlightPageIdx];
+    setIsAiLoading(true);
+    setAiProgressMessage('Applying AI edit to selected text...');
+    try {
+      const result = await runTextLevelAIAsync(highlightedText, instruction, attachments);
+      const pageEl = pageRefs.current[highlightPageIdx];
 
-    if (pageEl) {
-      if (savedRangeRef.current) {
-        try {
-          const range = savedRangeRef.current;
-          range.deleteContents();
-          const frag = range.createContextualFragment(result.updatedHtml);
-          range.insertNode(frag);
-        } catch {
-          pageEl.focus();
-          const sel = window.getSelection();
-          sel?.removeAllRanges();
-          sel?.addRange(savedRangeRef.current);
-          window.document.execCommand('insertHTML', false, result.updatedHtml);
+      if (pageEl) {
+        if (savedRangeRef.current) {
+          try {
+            const range = savedRangeRef.current;
+            range.deleteContents();
+            const frag = range.createContextualFragment(result.updatedHtml);
+            range.insertNode(frag);
+          } catch {
+            pageEl.focus();
+            const sel = window.getSelection();
+            sel?.removeAllRanges();
+            sel?.addRange(savedRangeRef.current);
+            window.document.execCommand('insertHTML', false, result.updatedHtml);
+          }
         }
+        checkAndFlowPages(highlightPageIdx);
+        const nextPages = pages.map((_, i) => pageRefs.current[i]?.innerHTML || pages[i]);
+        setPages(nextPages);
+        triggerAutoSave({
+          overrideHtml: getCombinedCleanHtml(nextPages),
+        });
       }
-      checkAndFlowPages(highlightPageIdx);
-      const nextPages = pages.map((_, i) => pageRefs.current[i]?.innerHTML || pages[i]);
-      setPages(nextPages);
-      triggerAutoSave({
-        overrideHtml: getCombinedCleanHtml(nextPages),
-      });
+    } finally {
+      setIsAiLoading(false);
+      setAiProgressMessage('');
+      setShowTextAiPopup(false);
+      setHighlightedText('');
+      setHighlightBadgePos(null);
     }
-
-    setShowTextAiPopup(false);
-    setHighlightedText('');
-    setHighlightBadgePos(null);
   };
 
   // =========================================================================
-  // REQUIREMENT 5: PAGE-LEVEL AI EXECUTION (Modifies ONLY the selected page)
+  // REQUIREMENT 5: REAL PAGE-LEVEL AI EXECUTION (Modifies the selected page with Gemini)
   // =========================================================================
-  const handleExecutePageLevelAI = (
+  const handleExecutePageLevelAI = async (
     pageIndex: number,
     instruction: string,
-    attachments: { name: string; extractedText: string }[]
+    attachments: { name: string; extractedText: string }[] = []
   ) => {
     const currentHtml = pageRefs.current[pageIndex]
       ? pageRefs.current[pageIndex]!.innerHTML
       : pages[pageIndex] || '';
 
-    const result = runPageLevelAI(
-      currentHtml,
-      pageIndex,
-      instruction,
-      title,
-      attachments
-    );
+    setIsAiLoading(true);
+    setAiProgressMessage(`Updating Page ${pageIndex + 1} with AI...`);
 
-    const nextPages = pages.map((_, i) =>
-      pageRefs.current[i] ? pageRefs.current[i]!.innerHTML : pages[i]
-    );
-    nextPages[pageIndex] = result.updatedPageHtml;
-    if (pageRefs.current[pageIndex]) {
-      pageRefs.current[pageIndex]!.innerHTML = result.updatedPageHtml;
+    try {
+      const attPayload: AIAttachment[] = attachments.map((a, i) => ({
+        id: `att-${i}`,
+        name: a.name,
+        type: 'document',
+        fileType: 'TXT',
+        sizeFormatted: '',
+        extractedText: a.extractedText,
+      }));
+
+      const result = await runPageLevelAIAsync(
+        currentHtml,
+        pageIndex,
+        instruction,
+        title,
+        attPayload
+      );
+
+      const nextPages = pages.map((_, i) =>
+        pageRefs.current[i] ? pageRefs.current[i]!.innerHTML : pages[i]
+      );
+      nextPages[pageIndex] = result.updatedPageHtml;
+      if (pageRefs.current[pageIndex]) {
+        pageRefs.current[pageIndex]!.innerHTML = result.updatedPageHtml;
+      }
+      setPages(nextPages);
+      setActivePageAiIdx(null);
+      triggerAutoSave({
+        overrideHtml: getCombinedCleanHtml(nextPages),
+      });
+    } finally {
+      setIsAiLoading(false);
+      setAiProgressMessage('');
     }
-    setPages(nextPages);
-    setActivePageAiIdx(null);
-    triggerAutoSave({
-      overrideHtml: getCombinedCleanHtml(nextPages),
-    });
   };
 
   // =========================================================================
@@ -2232,6 +2261,13 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
       );
 
       // Requirement 1 & 2: Call Gemini / Workspace AI with Strict Active Document Context Isolation
+      const conversationHistory = (doc.aiHistory || [])
+        .map((m) => ({
+          role: (m.role === 'assistant' ? 'model' : 'user') as 'user' | 'model',
+          text: m.role === 'assistant' ? (m.summary || m.prompt || 'Document updated') : (m.prompt || ''),
+        }))
+        .filter((m) => m.text.trim().length > 0);
+
       const result: WorkspaceAIResult = await runWorkspaceAIPromptAsync(
         effectiveQuery,
         {
@@ -2242,7 +2278,9 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
         currentPagesHtml,
         explicitGroupId,
         explicitPageIndices,
-        aiUploadedRefs
+        aiUploadedRefs,
+        aiUploadedRefs,
+        conversationHistory
       );
 
       setAiProgressMessage('Applying changes to document...');
@@ -5433,6 +5471,53 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
               >
                 <X size={14} />
               </button>
+            </div>
+
+            {/* Gemini Live API / Offline Fallback Status Bar */}
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                padding: '6px 14px',
+                backgroundColor: Boolean(getGeminiApiKey()) ? 'rgba(16, 185, 129, 0.08)' : 'rgba(245, 158, 11, 0.08)',
+                borderBottom: '1px solid',
+                borderColor: Boolean(getGeminiApiKey()) ? 'rgba(16, 185, 129, 0.2)' : 'rgba(245, 158, 11, 0.25)',
+                fontSize: '11px',
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                <span
+                  style={{
+                    width: '7px',
+                    height: '7px',
+                    borderRadius: '50%',
+                    backgroundColor: Boolean(getGeminiApiKey()) ? '#10b981' : '#f59e0b',
+                    display: 'inline-block',
+                  }}
+                />
+                <span style={{ fontWeight: 500, color: 'var(--ink-rich)' }}>
+                  {Boolean(getGeminiApiKey()) ? 'Gemini 1.5 Flash Connected' : 'Local Offline AI Fallback'}
+                </span>
+              </div>
+              {!Boolean(getGeminiApiKey()) && onNavigateSettings && (
+                <button
+                  type="button"
+                  onClick={onNavigateSettings}
+                  style={{
+                    background: 'none',
+                    border: 'none',
+                    padding: 0,
+                    color: 'var(--accent-blue)',
+                    fontWeight: 600,
+                    cursor: 'pointer',
+                    fontSize: '11px',
+                    textDecoration: 'underline',
+                  }}
+                >
+                  Add API Key
+                </button>
+              )}
             </div>
 
             {/* Requirement 6: Granular Focus Scope Selector (Entire Document | Selected Group + Pages | Selected Page) */}
