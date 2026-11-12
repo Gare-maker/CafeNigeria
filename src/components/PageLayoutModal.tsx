@@ -75,6 +75,7 @@ export const PageLayoutModal: React.FC<PageLayoutModalProps> = ({
   );
 
   const [columnScope, setColumnScope] = useState<'document' | 'page'>('document');
+  const [borderScope, setBorderScope] = useState<'document' | 'page'>('document');
 
   // Synchronize when external layout changes
   useEffect(() => {
@@ -885,39 +886,82 @@ export const PageLayoutModal: React.FC<PageLayoutModalProps> = ({
                 <div>
                   <label className="ed-field-label">Border Style</label>
                   <select
-                    value={layout.borderStyle}
-                    onChange={(e) =>
-                      onChangeLayout((prev) => ({
-                        ...prev,
-                        borderStyle: e.target.value as PageLayoutSettings['borderStyle'],
-                      }))
+                    value={
+                      (layout.sectionBorders && layout.sectionBorders[activePageIndex]?.borderStyle) ||
+                      layout.borderStyle ||
+                      'none'
                     }
+                    onChange={(e) => {
+                      const newStyle = e.target.value as PageLayoutSettings['borderStyle'];
+                      if (borderScope === 'page') {
+                        onChangeLayout((prev) => ({
+                          ...prev,
+                          sectionBorders: {
+                            ...(prev.sectionBorders || {}),
+                            [activePageIndex]: {
+                              borderStyle: newStyle,
+                              borderWidthPx: prev.sectionBorders?.[activePageIndex]?.borderWidthPx ?? prev.borderWidthPx ?? 1,
+                              borderColor: prev.sectionBorders?.[activePageIndex]?.borderColor ?? prev.borderColor ?? '#0A194E',
+                              borderInsetMm: prev.sectionBorders?.[activePageIndex]?.borderInsetMm ?? prev.borderInsetMm ?? 10,
+                            },
+                          },
+                        }));
+                      } else {
+                        onChangeLayout((prev) => ({
+                          ...prev,
+                          borderStyle: newStyle,
+                        }));
+                      }
+                    }}
                     className="ed-select"
                   >
                     <option value="none">None</option>
                     <option value="solid">Solid</option>
                     <option value="double">Double</option>
                     <option value="dashed">Dashed</option>
+                    <option value="dotted">Dotted</option>
                   </select>
                 </div>
 
                 <div>
                   <label className="ed-field-label">Border Width</label>
                   <select
-                    value={layout.borderWidthPx}
-                    onChange={(e) =>
-                      onChangeLayout((prev) => ({
-                        ...prev,
-                        borderWidthPx: parseInt(e.target.value, 10),
-                      }))
+                    value={
+                      (layout.sectionBorders && layout.sectionBorders[activePageIndex]?.borderWidthPx) ||
+                      layout.borderWidthPx ||
+                      1
                     }
+                    onChange={(e) => {
+                      const newWidth = parseInt(e.target.value, 10);
+                      if (borderScope === 'page') {
+                        onChangeLayout((prev) => ({
+                          ...prev,
+                          sectionBorders: {
+                            ...(prev.sectionBorders || {}),
+                            [activePageIndex]: {
+                              borderStyle: prev.sectionBorders?.[activePageIndex]?.borderStyle ?? prev.borderStyle ?? 'solid',
+                              borderWidthPx: newWidth,
+                              borderColor: prev.sectionBorders?.[activePageIndex]?.borderColor ?? prev.borderColor ?? '#0A194E',
+                              borderInsetMm: prev.sectionBorders?.[activePageIndex]?.borderInsetMm ?? prev.borderInsetMm ?? 10,
+                            },
+                          },
+                        }));
+                      } else {
+                        onChangeLayout((prev) => ({
+                          ...prev,
+                          borderWidthPx: newWidth,
+                        }));
+                      }
+                    }}
                     className="ed-select"
                   >
                     <option value={1}>1 px</option>
                     <option value={2}>2 px</option>
                     <option value={3}>3 px</option>
                     <option value={4}>4 px</option>
+                    <option value={5}>5 px</option>
                     <option value={6}>6 px</option>
+                    <option value={8}>8 px</option>
                   </select>
                 </div>
 
@@ -926,13 +970,33 @@ export const PageLayoutModal: React.FC<PageLayoutModalProps> = ({
                   <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                     <input
                       type="color"
-                      value={layout.borderColor || '#0A194E'}
-                      onChange={(e) =>
-                        onChangeLayout((prev) => ({
-                          ...prev,
-                          borderColor: e.target.value,
-                        }))
+                      value={
+                        (layout.sectionBorders && layout.sectionBorders[activePageIndex]?.borderColor) ||
+                        layout.borderColor ||
+                        '#0A194E'
                       }
+                      onChange={(e) => {
+                        const newColor = e.target.value;
+                        if (borderScope === 'page') {
+                          onChangeLayout((prev) => ({
+                            ...prev,
+                            sectionBorders: {
+                              ...(prev.sectionBorders || {}),
+                              [activePageIndex]: {
+                                borderStyle: prev.sectionBorders?.[activePageIndex]?.borderStyle ?? prev.borderStyle ?? 'solid',
+                                borderWidthPx: prev.sectionBorders?.[activePageIndex]?.borderWidthPx ?? prev.borderWidthPx ?? 1,
+                                borderColor: newColor,
+                                borderInsetMm: prev.sectionBorders?.[activePageIndex]?.borderInsetMm ?? prev.borderInsetMm ?? 10,
+                              },
+                            },
+                          }));
+                        } else {
+                          onChangeLayout((prev) => ({
+                            ...prev,
+                            borderColor: newColor,
+                          }));
+                        }
+                      }}
                       style={{
                         width: '38px',
                         height: '34px',
@@ -943,17 +1007,117 @@ export const PageLayoutModal: React.FC<PageLayoutModalProps> = ({
                     />
                     <input
                       type="text"
-                      value={layout.borderColor || '#0A194E'}
-                      onChange={(e) =>
-                        onChangeLayout((prev) => ({
-                          ...prev,
-                          borderColor: e.target.value,
-                        }))
+                      value={
+                        (layout.sectionBorders && layout.sectionBorders[activePageIndex]?.borderColor) ||
+                        layout.borderColor ||
+                        '#0A194E'
                       }
+                      onChange={(e) => {
+                        const newColor = e.target.value;
+                        if (borderScope === 'page') {
+                          onChangeLayout((prev) => ({
+                            ...prev,
+                            sectionBorders: {
+                              ...(prev.sectionBorders || {}),
+                              [activePageIndex]: {
+                                borderStyle: prev.sectionBorders?.[activePageIndex]?.borderStyle ?? prev.borderStyle ?? 'solid',
+                                borderWidthPx: prev.sectionBorders?.[activePageIndex]?.borderWidthPx ?? prev.borderWidthPx ?? 1,
+                                borderColor: newColor,
+                                borderInsetMm: prev.sectionBorders?.[activePageIndex]?.borderInsetMm ?? prev.borderInsetMm ?? 10,
+                              },
+                            },
+                          }));
+                        } else {
+                          onChangeLayout((prev) => ({
+                            ...prev,
+                            borderColor: newColor,
+                          }));
+                        }
+                      }}
                       className="ed-input"
                       style={{ padding: '6px 8px', fontSize: '11px' }}
                     />
                   </div>
+                </div>
+
+                <div>
+                  <label className="ed-field-label">Border Inset (mm)</label>
+                  <input
+                    type="number"
+                    min={0}
+                    max={30}
+                    value={
+                      (layout.sectionBorders && layout.sectionBorders[activePageIndex]?.borderInsetMm !== undefined
+                        ? layout.sectionBorders[activePageIndex]?.borderInsetMm
+                        : layout.borderInsetMm !== undefined
+                        ? layout.borderInsetMm
+                        : 10)
+                    }
+                    onChange={(e) => {
+                      const inset = Math.max(0, Math.min(30, parseInt(e.target.value, 10) || 0));
+                      if (borderScope === 'page') {
+                        onChangeLayout((prev) => ({
+                          ...prev,
+                          sectionBorders: {
+                            ...(prev.sectionBorders || {}),
+                            [activePageIndex]: {
+                              borderStyle: prev.sectionBorders?.[activePageIndex]?.borderStyle ?? prev.borderStyle ?? 'solid',
+                              borderWidthPx: prev.sectionBorders?.[activePageIndex]?.borderWidthPx ?? prev.borderWidthPx ?? 1,
+                              borderColor: prev.sectionBorders?.[activePageIndex]?.borderColor ?? prev.borderColor ?? '#0A194E',
+                              borderInsetMm: inset,
+                            },
+                          },
+                        }));
+                      } else {
+                        onChangeLayout((prev) => ({
+                          ...prev,
+                          borderInsetMm: inset,
+                        }));
+                      }
+                    }}
+                    className="ed-input"
+                    style={{ padding: '6px 8px', fontSize: '11px' }}
+                  />
+                </div>
+              </div>
+
+              {/* Border Application Scope */}
+              <div
+                style={{
+                  borderTop: '1px solid var(--border-stone)',
+                  paddingTop: '12px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  flexWrap: 'wrap',
+                  gap: '8px',
+                }}
+              >
+                <div>
+                  <label className="ed-field-label" style={{ marginBottom: '2px' }}>
+                    Apply Border To:
+                  </label>
+                  <p style={{ fontSize: '11px', color: 'var(--ink-muted)' }}>
+                    Choose whether this border applies to the entire document or only Page {activePageIndex + 1}.
+                  </p>
+                </div>
+                <div style={{ display: 'flex', gap: '6px' }}>
+                  <button
+                    type="button"
+                    onClick={() => setBorderScope('document')}
+                    className={borderScope === 'document' ? 'btn-ed-primary' : 'btn-ed-subtle'}
+                    style={{ padding: '5px 12px', fontSize: '11px' }}
+                  >
+                    Entire Document
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setBorderScope('page')}
+                    className={borderScope === 'page' ? 'btn-ed-primary' : 'btn-ed-subtle'}
+                    style={{ padding: '5px 12px', fontSize: '11px' }}
+                  >
+                    Page {activePageIndex + 1} Only
+                  </button>
                 </div>
               </div>
             </div>

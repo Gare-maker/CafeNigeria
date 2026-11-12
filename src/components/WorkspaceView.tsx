@@ -47,16 +47,24 @@ import {
   Save,
   HardDrive,
   AlertCircle,
+  Coins,
+  CreditCard,
+  Bookmark,
+  BookOpen,
+  ExternalLink,
+  Globe,
 } from 'lucide-react';
 import {
   AIMessage,
   CanvasImageElement,
+  CreditTopUpBundle,
   DocumentItem,
   DrawingElement,
   ExportScopeOptions,
   PageGroup,
   PageLayoutSettings,
   ShapeType,
+  SourceReference,
   SyncStatus,
 } from '../types';
 import {
@@ -64,7 +72,18 @@ import {
   runPageLevelAI,
   runTextLevelAI,
   runWorkspaceAIPrompt,
+  extractSourceReferences,
+  parseGroupingInstruction,
 } from '../services/aiGenerator';
+import {
+  billingManager,
+  CREDIT_TOP_UP_BUNDLES,
+  SUBSCRIPTION_PLANS,
+} from '../services/billingService';
+import {
+  COVER_PAGE_DESIGNS,
+  CoverPageDesign,
+} from '../services/templates';
 import {
   ElementLayerToolbar,
   PageLevelAIPopover,
@@ -83,6 +102,8 @@ interface WorkspaceViewProps {
   onExportPdf: (doc: DocumentItem, options?: ExportScopeOptions) => void;
   onExportTxt: (doc: DocumentItem, options?: ExportScopeOptions) => void;
   onSaveToComputer?: (doc: DocumentItem) => void;
+  allDocuments?: DocumentItem[];
+  onNavigateSettings?: () => void;
 }
 
 const DEFAULT_LAYOUT: PageLayoutSettings = {
@@ -101,6 +122,8 @@ const DEFAULT_LAYOUT: PageLayoutSettings = {
   borderStyle: 'none',
   borderWidthPx: 1,
   borderColor: '#0A194E',
+  borderInsetMm: 10,
+  sectionBorders: {},
   headerSpacingPx: 18,
   footerSpacingPx: 24,
   sectionOrientations: {},
@@ -157,6 +180,8 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
   onExportPdf,
   onExportTxt,
   onSaveToComputer,
+  allDocuments = [],
+  onNavigateSettings,
 }) => {
   const pageRefs = useRef<(HTMLDivElement | null)[]>([]);
   const activePageIdxRef = useRef<number>(0);
@@ -170,6 +195,48 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
   const activeTableCellRef = useRef<HTMLTableCellElement | null>(null);
   const videoPreviewRef = useRef<HTMLVideoElement>(null);
   const cameraStreamRef = useRef<MediaStream | null>(null);
+
+  // Section 11 & 12: Credit Wallet & Billing
+  const [wallet, setWallet] = useState(() => billingManager.getWallet());
+  const [subscription, setSubscription] = useState(() => billingManager.getSubscription());
+  const [showCreditPopover, setShowCreditPopover] = useState(false);
+  const [showTopUpModal, setShowTopUpModal] = useState(false);
+
+  // Section 6: In-Editor Cover Page Manager
+  const [showCoverManagerModal, setShowCoverManagerModal] = useState(false);
+  const [coverTargetPageIndex, setCoverTargetPageIndex] = useState<number>(0);
+  const [selectedCoverCategoryFilter, setSelectedCoverCategoryFilter] = useState<'current' | 'all'>('current');
+  const [selectedCoverDesignId, setSelectedCoverDesignId] = useState<string>('cover-assignment-classic');
+  const [coverFormData, setCoverFormData] = useState({
+    title: doc.title || '',
+    course: doc.metadata.course || '',
+    courseCode: doc.metadata.courseCode || '',
+    institution: doc.metadata.institution || '',
+    department: doc.metadata.department || '',
+    studentName: doc.metadata.studentName || '',
+    matricNo: doc.metadata.matricNo || '',
+    lecturerOrSupervisor: doc.metadata.lecturerOrSupervisor || '',
+    submissionDate: doc.metadata.submissionDate || 'NOVEMBER, 2026',
+  });
+
+  // Section 9: AI-Controlled Page Grouping Proposal State
+  const [pendingGroupingProposal, setPendingGroupingProposal] = useState<{
+    groupName: string;
+    pageIndices: number[];
+    originalPrompt?: string;
+  } | null>(null);
+
+  // Section 5: AI Workspace Document Selection State
+  const [showWorkspaceDocSelector, setShowWorkspaceDocSelector] = useState(false);
+
+  // Subscribe to BillingManager live events
+  useEffect(() => {
+    const unsub = billingManager.subscribe(() => {
+      setWallet(billingManager.getWallet());
+      setSubscription(billingManager.getSubscription());
+    });
+    return unsub;
+  }, []);
 
   const [title, setTitle] = useState(doc.title);
   const [pages, setPages] = useState<string[]>(() =>
@@ -2116,11 +2183,30 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
     const query = combinedMainAiInput.trim();
     if (!query && aiUploadedRefs.length === 0) return;
 
+    // Check Credit Wallet Status (Section 11 & 12)
+    const usageCheck = billingManager.getUsageStatus();
+    if (!usageCheck.canUseAI) {
+      alert(
+        'AI Credit Limit Reached: Manual editing, typing, formatting, and file export remain 100% active. Upgrade your plan or purchase top-up credits to re-enable AI assistance.'
+      );
+      return;
+    }
+
     const effectiveQuery =
       query ||
       `Update the selected scope using the attached reference material (${aiUploadedRefs
         .map((r) => r.name)
         .join(', ')}).`;
+
+    // Check for AI Grouping Instruction (Section 9)
+    const groupingProposal = parseGroupingInstruction(effectiveQuery, pages.length);
+    if (groupingProposal) {
+      setPendingGroupingProposal({
+        groupName: groupingProposal.groupName,
+        pageIndices: groupingProposal.pageIndices,
+        originalPrompt: effectiveQuery,
+      });
+    }
 
     const now = new Date();
     const timeStr = `${String(now.getHours()).padStart(2, '0')}:${String(
@@ -2160,6 +2246,18 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
     setIsAiLoading(true);
 
     setTimeout(() => {
+      // Calculate token usage and deduct credits (Section 12)
+      const inputTokenEst = Math.ceil(effectiveQuery.length / 4) +
+        aiUploadedRefs.reduce((acc, r) => acc + Math.ceil(r.extractedText.length / 4), 0);
+      const outputTokenEst = 750;
+      billingManager.reserveAndDeductCredits(
+        'Workspace Assistant Generation',
+        'gemini-1.5-flash',
+        Math.max(60, inputTokenEst),
+        outputTokenEst,
+        doc.title
+      );
+
       const result = runWorkspaceAIPrompt(
         effectiveQuery,
         {
@@ -2188,6 +2286,26 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
         setPages(nextPages);
       }
 
+      // Extract source references (Section 5)
+      const allCandidateSources = [
+        ...aiUploadedRefs.map((r) => ({
+          name: r.name,
+          extractedText: r.extractedText,
+          type: 'upload',
+        })),
+        ...allDocuments.map((d) => ({
+          name: d.title,
+          extractedText: d.content.replace(/<[^>]+>/g, ' ').slice(0, 160),
+          docId: d.id,
+          type: 'workspace_doc',
+        })),
+      ];
+
+      const extractedSources = extractSourceReferences(
+        result.summary + ' ' + (result.generatedHtml || ''),
+        allCandidateSources
+      );
+
       const assistantMsg: AIMessage = {
         id: `a-${Date.now() + 1}`,
         role: 'assistant',
@@ -2199,6 +2317,7 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
         targetGroupId: result.targetGroupId,
         targetGroupName: result.targetGroupName,
         targetPageIndex: result.targetPageIndices?.[0],
+        sources: extractedSources.length > 0 ? extractedSources : undefined,
       };
 
       const nextHistory = [...doc.aiHistory, userMsg, assistantMsg];
@@ -2209,6 +2328,93 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
         overrideAiHistory: nextHistory,
       });
     }, 320);
+  };
+
+  // Section 9: Apply AI Grouping Proposal with User Confirmation
+  const handleApplyPendingGrouping = () => {
+    if (!pendingGroupingProposal) return;
+    const { groupName, pageIndices } = pendingGroupingProposal;
+    const existingIdx = pageGroups.findIndex(
+      (g) => g.name.toLowerCase() === groupName.toLowerCase()
+    );
+
+    let nextGroups: PageGroup[];
+    if (existingIdx >= 0) {
+      nextGroups = pageGroups.map((g, idx) =>
+        idx === existingIdx
+          ? {
+              ...g,
+              pageIndices: Array.from(new Set([...g.pageIndices, ...pageIndices])),
+            }
+          : g
+      );
+    } else {
+      const newGroup: PageGroup = {
+        id: `grp-${Date.now()}`,
+        name: groupName,
+        pageIndices: pageIndices,
+      };
+      nextGroups = [...pageGroups, newGroup];
+    }
+
+    setPageGroups(nextGroups);
+    setHasUnsavedChanges(true);
+    triggerAutoSave({ overrideGroups: nextGroups });
+    setPendingGroupingProposal(null);
+  };
+
+  // Section 6: Apply In-Editor Cover Page Design
+  const handleApplyCoverPage = () => {
+    const design =
+      COVER_PAGE_DESIGNS.find((d) => d.id === selectedCoverDesignId) ||
+      COVER_PAGE_DESIGNS[0];
+    const generatedHtml = design.renderHtml(
+      coverFormData.title || title,
+      {
+        course: coverFormData.course,
+        courseCode: coverFormData.courseCode,
+        institution: coverFormData.institution,
+        department: coverFormData.department,
+        studentName: coverFormData.studentName,
+        matricNo: coverFormData.matricNo,
+        lecturerOrSupervisor: coverFormData.lecturerOrSupervisor,
+        submissionDate: coverFormData.submissionDate,
+      }
+    );
+
+    const nextPages = [...pages];
+    nextPages[coverTargetPageIndex] = generatedHtml;
+    setPages(nextPages);
+    if (pageRefs.current[coverTargetPageIndex]) {
+      pageRefs.current[coverTargetPageIndex]!.innerHTML = generatedHtml;
+    }
+
+    const updatedMetadata = {
+      ...doc.metadata,
+      ...coverFormData,
+      coverPageIndex: coverTargetPageIndex,
+    };
+    onUpdateDocument({
+      ...doc,
+      title: coverFormData.title || title,
+      content: getCombinedCleanHtml(nextPages),
+      metadata: updatedMetadata,
+    });
+    setHasUnsavedChanges(true);
+    setShowCoverManagerModal(false);
+  };
+
+  // Section 5: Add Reference from Workspace Document to AI Context
+  const handleAddWorkspaceDocReference = (refDoc: DocumentItem) => {
+    const textSnippet = refDoc.content.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 800);
+    setAiUploadedRefs((prev) => [
+      ...prev,
+      {
+        name: `[Doc] ${refDoc.title}`,
+        extractedText: textSnippet,
+      },
+    ]);
+    setShowWorkspaceDocSelector(false);
   };
 
   const selectedDrawingObj =
@@ -2702,6 +2908,187 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
               </>
             )}
           </div>
+
+          {/* Section 11 & 12: Persistent Workspace Header AI Credit Indicator & Popover */}
+          {(() => {
+            const usageStatus = billingManager.getUsageStatus();
+            return (
+              <div style={{ position: 'relative' }}>
+                <button
+                  type="button"
+                  onClick={() => setShowCreditPopover((v) => !v)}
+                  className="btn-ed-subtle"
+                  style={{
+                    height: '28px',
+                    padding: '0 8px',
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '6px',
+                    border:
+                      usageStatus.status === 'exhausted'
+                        ? '1px solid #DC2626'
+                        : usageStatus.status === 'critical_warning'
+                        ? '1px solid #EA580C'
+                        : '1px solid var(--border-stone)',
+                    backgroundColor:
+                      usageStatus.status === 'exhausted'
+                        ? '#FEF2F2'
+                        : 'transparent',
+                  }}
+                  title="Click to view AI Credit Wallet & Plans"
+                >
+                  <Coins
+                    size={12}
+                    color={
+                      usageStatus.status === 'exhausted'
+                        ? '#DC2626'
+                        : 'var(--accent-blue)'
+                    }
+                  />
+                  <span
+                    style={{
+                      fontSize: '11px',
+                      fontWeight: 700,
+                      color:
+                        usageStatus.status === 'exhausted'
+                          ? '#DC2626'
+                          : 'var(--ink-navy)',
+                    }}
+                  >
+                    {wallet.availableCredits.toLocaleString()} /{' '}
+                    {wallet.totalAllocatedCredits.toLocaleString()} cr
+                  </span>
+
+                  {/* Micro Progress Bar */}
+                  <span
+                    className="hide-on-mobile"
+                    style={{
+                      width: '30px',
+                      height: '4px',
+                      backgroundColor: '#E2E8F0',
+                      borderRadius: '2px',
+                      overflow: 'hidden',
+                      display: 'inline-block',
+                    }}
+                  >
+                    <span
+                      style={{
+                        display: 'block',
+                        width: `${Math.min(100, (wallet.consumedCredits / Math.max(1, wallet.totalAllocatedCredits)) * 100)}%`,
+                        height: '100%',
+                        backgroundColor:
+                          usageStatus.status === 'exhausted'
+                            ? '#DC2626'
+                            : usageStatus.status === 'critical_warning'
+                            ? '#EA580C'
+                            : 'var(--accent-blue)',
+                      }}
+                    />
+                  </span>
+                </button>
+
+                {/* Interactive Credit Popover */}
+                {showCreditPopover && (
+                  <div
+                    style={{
+                      position: 'absolute',
+                      top: '34px',
+                      left: '0',
+                      width: '290px',
+                      backgroundColor: 'var(--bg-ivory)',
+                      border: '1px solid var(--border-stone)',
+                      boxShadow: '0 8px 24px rgba(0, 0, 0, 0.14)',
+                      padding: '16px',
+                      zIndex: 9999,
+                      fontSize: '12px',
+                    }}
+                  >
+                    <div
+                      style={{
+                        display: 'flex',
+                        justifyContent: 'space-between',
+                        alignItems: 'center',
+                        marginBottom: '10px',
+                      }}
+                    >
+                      <strong style={{ color: 'var(--ink-navy)' }}>AI Credit Wallet</strong>
+                      <button
+                        type="button"
+                        onClick={() => setShowCreditPopover(false)}
+                        style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--ink-muted)' }}
+                      >
+                        <X size={13} />
+                      </button>
+                    </div>
+
+                    <div
+                      style={{
+                        padding: '8px 10px',
+                        backgroundColor: 'var(--bg-stone)',
+                        borderRadius: '2px',
+                        marginBottom: '10px',
+                      }}
+                    >
+                      <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                        <span style={{ color: 'var(--ink-muted)' }}>Current Plan:</span>
+                        <strong>
+                          {SUBSCRIPTION_PLANS.find((p) => p.id === subscription.planId)?.name || 'Standard Pro'}
+                        </strong>
+                      </div>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '4px' }}>
+                        <span style={{ color: 'var(--ink-muted)' }}>Renewal:</span>
+                        <span>{wallet.renewalDate}</span>
+                      </div>
+                    </div>
+
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', marginBottom: '14px', fontSize: '11.5px' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                        <span style={{ color: 'var(--ink-muted)' }}>• Subscription Credits:</span>
+                        <strong>{wallet.breakdown.subscription.toLocaleString()}</strong>
+                      </div>
+                      <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                        <span style={{ color: 'var(--ink-muted)' }}>• Top-Up Credits:</span>
+                        <strong>{wallet.breakdown.purchased.toLocaleString()}</strong>
+                      </div>
+                      <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                        <span style={{ color: 'var(--ink-muted)' }}>• Promotional:</span>
+                        <strong>{wallet.breakdown.promotional.toLocaleString()}</strong>
+                      </div>
+                    </div>
+
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setShowCreditPopover(false);
+                          setShowTopUpModal(true);
+                        }}
+                        className="btn-ed-primary"
+                        style={{ width: '100%', justifyContent: 'center', padding: '6px', fontSize: '11px' }}
+                      >
+                        <Coins size={12} />
+                        <span>Buy Top-Up Credits</span>
+                      </button>
+                      {onNavigateSettings && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setShowCreditPopover(false);
+                            onNavigateSettings();
+                          }}
+                          className="btn-ed-outline"
+                          style={{ width: '100%', justifyContent: 'center', padding: '6px', fontSize: '11px' }}
+                        >
+                          <CreditCard size={12} />
+                          <span>Manage Plans &amp; Billing</span>
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </div>
+            );
+          })()}
         </div>
 
         {/* Right Actions: Undo/Redo, Save File to Computer, Open File, Export, AI Assistant */}
@@ -3218,6 +3605,80 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
           </button>
         </div>
       </header>
+
+      {/* Section 12: AI Credit Exhaustion / Critical Warning Banner */}
+      {(() => {
+        const usageStatus = billingManager.getUsageStatus();
+        if (usageStatus.status === 'exhausted') {
+          return (
+            <div
+              className="no-print"
+              style={{
+                backgroundColor: '#FEF2F2',
+                borderBottom: '1px solid #FCA5A5',
+                padding: '8px 18px',
+                fontSize: '12px',
+                color: '#B91C1C',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                flexWrap: 'wrap',
+                gap: '8px',
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <AlertTriangle size={15} color="#DC2626" />
+                <span>
+                  <strong>AI Credit Limit Reached:</strong> Manual document typing, editing, formatting, and file exports remain 100% active. Upgrade your plan or add credits to re-enable AI assistance.
+                </span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowTopUpModal(true)}
+                className="btn-ed-primary"
+                style={{ padding: '3px 10px', fontSize: '11px', height: '24px' }}
+              >
+                Buy Credits
+              </button>
+            </div>
+          );
+        }
+        if (usageStatus.status === 'critical_warning') {
+          return (
+            <div
+              className="no-print"
+              style={{
+                backgroundColor: '#FFFBEB',
+                borderBottom: '1px solid #FCD34D',
+                padding: '6px 18px',
+                fontSize: '11.5px',
+                color: '#92400E',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                flexWrap: 'wrap',
+                gap: '8px',
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                <AlertCircle size={14} color="#D97706" />
+                <span>
+                  <strong>Low Credit Warning:</strong> Over 95% of your AI credit balance has been consumed ({wallet.availableCredits.toLocaleString()} credits remaining).
+                </span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowTopUpModal(true)}
+                className="btn-ed-outline"
+                style={{ padding: '2px 8px', fontSize: '10.5px', height: '22px' }}
+              >
+                Top Up Now
+              </button>
+            </div>
+          );
+        }
+        return null;
+      })()}
 
       {/* =====================================================================
           FORMATTING & INSERTION TOOLBAR
@@ -4410,15 +4871,43 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
                   minHeight: `${dim.heightPx}px`,
                   padding: `${dim.padTopPx}px ${dim.padRightPx}px ${dim.padBottomPx}px ${dim.padLeftPx}px`,
                   backgroundColor: layout.pageBackground || '#FFFFFF',
-                  border:
-                    layout.borderStyle !== 'none'
-                      ? `${layout.borderWidthPx}px ${layout.borderStyle} ${layout.borderColor}`
-                      : '1px solid var(--border-stone)',
+                  border: '1px solid var(--border-stone)',
+                  position: 'relative',
                   fontFamily: `"${
                     doc.metadata.fontFamily || 'Times New Roman'
                   }", Georgia, serif`,
                 }}
               >
+                {/* Section 6: Inset Decorative Page Border */}
+                {(() => {
+                  const secBorder = layout.sectionBorders?.[pageIdx];
+                  const borderStyle = secBorder ? secBorder.borderStyle : layout.borderStyle;
+                  const borderWidthPx = secBorder ? secBorder.borderWidthPx : layout.borderWidthPx;
+                  const borderColor = secBorder ? secBorder.borderColor : layout.borderColor;
+                  const borderInsetMm = secBorder?.borderInsetMm ?? layout.borderInsetMm ?? 10;
+                  const borderInsetPx = Math.round(borderInsetMm * 3.7795);
+
+                  if (!borderStyle || borderStyle === 'none') {
+                    return null;
+                  }
+
+                  return (
+                    <div
+                      className="doc-page-decorative-border"
+                      style={{
+                        position: 'absolute',
+                        top: `${borderInsetPx}px`,
+                        left: `${borderInsetPx}px`,
+                        right: `${borderInsetPx}px`,
+                        bottom: `${borderInsetPx}px`,
+                        border: `${borderWidthPx}px ${borderStyle} ${borderColor}`,
+                        pointerEvents: 'none',
+                        zIndex: 2,
+                      }}
+                    />
+                  );
+                })()}
+
                 {/* Page Running Header + Dedicated Page-Level AI Icon (Requirement 5) */}
                 <div
                   style={{
@@ -4447,6 +4936,62 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
                       flexWrap: 'wrap',
                     }}
                   >
+                    {/* Section 6: In-Editor Cover Page Designation & Manager */}
+                    {doc.metadata.coverPageIndex === pageIdx ? (
+                      <div className="no-print" style={{ display: 'inline-flex', alignItems: 'center', gap: '3px' }}>
+                        <span
+                          style={{
+                            fontFamily: 'var(--font-mono)',
+                            fontSize: '8.5px',
+                            backgroundColor: '#DCFCE7',
+                            color: '#15803D',
+                            border: '1px solid #86EFAC',
+                            padding: '1px 6px',
+                            fontWeight: 700,
+                          }}
+                        >
+                          ★ Cover Page
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setCoverTargetPageIndex(pageIdx);
+                            setShowCoverManagerModal(true);
+                          }}
+                          className="btn-ed-subtle"
+                          style={{ padding: '1px 5px', fontSize: '8.5px', height: '18px' }}
+                        >
+                          Customize
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const updatedMeta = { ...doc.metadata, coverPageIndex: undefined };
+                            onUpdateDocument({ ...doc, metadata: updatedMeta });
+                            setHasUnsavedChanges(true);
+                          }}
+                          className="btn-ed-subtle"
+                          style={{ padding: '1px 5px', fontSize: '8.5px', height: '18px', color: '#DC2626' }}
+                          title="Remove cover page status"
+                        >
+                          Remove
+                        </button>
+                      </div>
+                    ) : (
+                      <button
+                        type="button"
+                        className="no-print btn-ed-subtle"
+                        onClick={() => {
+                          setCoverTargetPageIndex(pageIdx);
+                          setShowCoverManagerModal(true);
+                        }}
+                        style={{ padding: '1px 6px', fontSize: '8.5px', height: '18px' }}
+                        title="Designate and customize this page as the cover page"
+                      >
+                        + Set as Cover
+                      </button>
+                    )}
+
                     {belongingGroups.map((g) => (
                       <span
                         key={g.id}
@@ -5169,18 +5714,154 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
                       )}
                     </div>
                   ) : (
-                    <div
-                      style={{
-                        fontSize: '12px',
-                        color: 'var(--ink-body)',
-                        lineHeight: 1.45,
-                      }}
-                    >
-                      ✓ {msg.summary}
+                    <div>
+                      <div
+                        style={{
+                          fontSize: '12px',
+                          color: 'var(--ink-body)',
+                          lineHeight: 1.45,
+                        }}
+                      >
+                        ✓ {msg.summary}
+                      </div>
+
+                      {/* Section 5: Source Reference Badges & Citations */}
+                      {msg.sources && msg.sources.length > 0 && (
+                        <div
+                          style={{
+                            marginTop: '8px',
+                            borderTop: '1px solid var(--border-ivory)',
+                            paddingTop: '6px',
+                          }}
+                        >
+                          <div
+                            style={{
+                              fontSize: '9.5px',
+                              fontWeight: 700,
+                              color: 'var(--ink-muted)',
+                              marginBottom: '4px',
+                              textTransform: 'uppercase',
+                              letterSpacing: '0.07em',
+                            }}
+                          >
+                            Sources &amp; References:
+                          </div>
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                            {msg.sources.map((src) => (
+                              <div
+                                key={src.id}
+                                style={{
+                                  fontSize: '11px',
+                                  backgroundColor: 'var(--bg-stone)',
+                                  padding: '5px 8px',
+                                  border: '1px solid var(--border-stone)',
+                                  display: 'flex',
+                                  alignItems: 'center',
+                                  justifyContent: 'space-between',
+                                  gap: '6px',
+                                }}
+                              >
+                                <div
+                                  style={{
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    gap: '5px',
+                                    overflow: 'hidden',
+                                    textOverflow: 'ellipsis',
+                                    whiteSpace: 'nowrap',
+                                  }}
+                                >
+                                  {src.type === 'web' ? (
+                                    <Globe size={11} color="var(--accent-blue)" />
+                                  ) : (
+                                    <FileText size={11} color="var(--accent-blue)" />
+                                  )}
+                                  <span style={{ fontWeight: 600 }}>{src.title}</span>
+                                </div>
+                                {src.url ? (
+                                  <a
+                                    href={src.url}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    style={{
+                                      color: 'var(--accent-blue)',
+                                      textDecoration: 'none',
+                                      display: 'flex',
+                                      alignItems: 'center',
+                                      gap: '2px',
+                                      fontSize: '10px',
+                                      flexShrink: 0,
+                                    }}
+                                  >
+                                    <span>Open</span>
+                                    <ExternalLink size={10} />
+                                  </a>
+                                ) : (
+                                  <span style={{ fontSize: '9.5px', color: 'var(--ink-muted)', flexShrink: 0 }}>
+                                    Verified Source
+                                  </span>
+                                )}
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
                     </div>
                   )}
                 </div>
               ))}
+
+              {/* Section 9: AI-Controlled Page Grouping User Confirmation Proposal */}
+              {pendingGroupingProposal && (
+                <div
+                  style={{
+                    backgroundColor: '#EEF2FF',
+                    border: '1px solid #C7D2FE',
+                    padding: '12px 14px',
+                    borderRadius: '2px',
+                  }}
+                >
+                  <div
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '6px',
+                      marginBottom: '6px',
+                    }}
+                  >
+                    <Layers size={14} color="#1447E6" />
+                    <strong style={{ fontSize: '12.5px', color: '#1E1B4B' }}>
+                      AI Proposes Page Grouping
+                    </strong>
+                  </div>
+                  <p style={{ fontSize: '12px', color: '#312E81', margin: '0 0 10px 0', lineHeight: 1.4 }}>
+                    Group Name: <strong>"{pendingGroupingProposal.groupName}"</strong>
+                    <br />
+                    Target Pages:{' '}
+                    <strong>
+                      {pendingGroupingProposal.pageIndices.map((p) => p + 1).join(', ')}
+                    </strong>
+                  </p>
+                  <div style={{ display: 'flex', gap: '8px' }}>
+                    <button
+                      type="button"
+                      onClick={handleApplyPendingGrouping}
+                      className="btn-ed-primary"
+                      style={{ padding: '4px 10px', fontSize: '11px' }}
+                    >
+                      Confirm &amp; Apply Grouping
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setPendingGroupingProposal(null)}
+                      className="btn-ed-subtle"
+                      style={{ padding: '4px 10px', fontSize: '11px' }}
+                    >
+                      Dismiss
+                    </button>
+                  </div>
+                </div>
+              )}
 
               {isAiLoading && (
                 <div
@@ -5368,6 +6049,26 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
                         style={{ display: 'none' }}
                       />
                     </label>
+
+                    {/* Section 5: Add Reference from Workspace Document */}
+                    <button
+                      type="button"
+                      onClick={() => setShowWorkspaceDocSelector(true)}
+                      title="Reference another workspace document"
+                      style={{
+                        width: '28px',
+                        height: '28px',
+                        border: '1px solid var(--border-stone)',
+                        backgroundColor: 'var(--bg-stone)',
+                        color: 'var(--ink-navy)',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        cursor: 'pointer',
+                      }}
+                    >
+                      <BookOpen size={12} />
+                    </button>
 
                     <button
                       type="button"
@@ -5631,6 +6332,549 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
                 >
                   Cancel
                 </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* =====================================================================
+          SECTION 12: CREDIT TOP-UP MODAL
+      ===================================================================== */}
+      {showTopUpModal && (
+        <div className="nc-modal-backdrop no-print" style={{ zIndex: 9999 }}>
+          <div
+            className="nc-modal-dialog"
+            style={{ maxWidth: '640px', padding: 0 }}
+          >
+            <div
+              style={{
+                padding: '16px 20px',
+                borderBottom: '1px solid var(--border-ivory)',
+                backgroundColor: 'var(--bg-ivory)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <Coins size={18} color="var(--accent-blue)" />
+                <h3
+                  style={{
+                    margin: 0,
+                    fontSize: '16px',
+                    fontWeight: 700,
+                    color: 'var(--ink-navy)',
+                  }}
+                >
+                  Purchase AI Top-Up Credits
+                </h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowTopUpModal(false)}
+                className="btn-ed-subtle"
+                style={{ padding: '4px' }}
+              >
+                <X size={14} />
+              </button>
+            </div>
+
+            <div style={{ padding: '20px' }}>
+              <p
+                style={{
+                  fontSize: '12.5px',
+                  color: 'var(--ink-muted)',
+                  lineHeight: 1.5,
+                  margin: '0 0 16px 0',
+                }}
+              >
+                Purchased credits never expire and roll over indefinitely. They are deducted only after
+                your monthly subscription credits are consumed.
+              </p>
+
+              <div
+                style={{
+                  display: 'grid',
+                  gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))',
+                  gap: '12px',
+                }}
+              >
+                {CREDIT_TOP_UP_BUNDLES.map((bundle) => (
+                  <div
+                    key={bundle.id}
+                    style={{
+                      border: bundle.popular
+                        ? '2px solid var(--accent-blue)'
+                        : '1px solid var(--border-stone)',
+                      backgroundColor: 'var(--bg-ivory)',
+                      padding: '16px',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      justifyContent: 'space-between',
+                      position: 'relative',
+                    }}
+                  >
+                    {bundle.popular && (
+                      <span
+                        style={{
+                          position: 'absolute',
+                          top: '-9px',
+                          right: '12px',
+                          backgroundColor: 'var(--accent-blue)',
+                          color: '#FFFFFF',
+                          fontFamily: 'var(--font-mono)',
+                          fontSize: '8.5px',
+                          padding: '1px 6px',
+                          textTransform: 'uppercase',
+                          fontWeight: 700,
+                        }}
+                      >
+                        Popular
+                      </span>
+                    )}
+
+                    <div>
+                      <div style={{ fontWeight: 700, fontSize: '13.5px', color: 'var(--ink-navy)' }}>
+                        {bundle.name}
+                      </div>
+                      <div
+                        style={{
+                          fontSize: '22px',
+                          fontWeight: 800,
+                          color: 'var(--ink-navy)',
+                          margin: '6px 0',
+                        }}
+                      >
+                        ₦{bundle.priceNgn.toLocaleString()}
+                      </div>
+                      <div style={{ fontSize: '12px', color: 'var(--accent-blue)', fontWeight: 600 }}>
+                        {(bundle.credits + (bundle.bonusCredits || 0)).toLocaleString()} Credits
+                        {bundle.bonusCredits !== undefined && bundle.bonusCredits > 0 && (
+                          <span style={{ fontSize: '10px', color: '#16A34A', marginLeft: '4px' }}>
+                            (+{bundle.bonusCredits.toLocaleString()} bonus)
+                          </span>
+                        )}
+                      </div>
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        billingManager.topUpCredits(bundle);
+                        setShowTopUpModal(false);
+                      }}
+                      className="btn-ed-primary"
+                      style={{
+                        marginTop: '14px',
+                        width: '100%',
+                        justifyContent: 'center',
+                        fontSize: '11px',
+                        padding: '7px',
+                      }}
+                    >
+                      <Plus size={12} />
+                      <span>Add to Wallet</span>
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* =====================================================================
+          SECTION 6: IN-EDITOR COVER PAGE MANAGER MODAL
+      ===================================================================== */}
+      {showCoverManagerModal && (
+        <div className="nc-modal-backdrop no-print" style={{ zIndex: 9999 }}>
+          <div
+            className="nc-modal-dialog"
+            style={{ maxWidth: '820px', padding: 0, maxHeight: '90vh', display: 'flex', flexDirection: 'column' }}
+          >
+            <div
+              style={{
+                padding: '16px 20px',
+                borderBottom: '1px solid var(--border-ivory)',
+                backgroundColor: 'var(--bg-ivory)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <LayoutTemplate size={18} color="var(--accent-blue)" />
+                <h3
+                  style={{
+                    margin: 0,
+                    fontSize: '16px',
+                    fontWeight: 700,
+                    color: 'var(--ink-navy)',
+                  }}
+                >
+                  In-Editor Cover Page Manager (Page {coverTargetPageIndex + 1})
+                </h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowCoverManagerModal(false)}
+                className="btn-ed-subtle"
+                style={{ padding: '4px' }}
+              >
+                <X size={14} />
+              </button>
+            </div>
+
+            <div
+              style={{
+                padding: '20px',
+                overflowY: 'auto',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: '20px',
+              }}
+            >
+              {/* Category Filter */}
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                <div style={{ fontSize: '13px', color: 'var(--ink-muted)' }}>
+                  Choose a style and customize the fields to format this page as your official cover.
+                </div>
+                <div style={{ display: 'flex', gap: '6px' }}>
+                  <button
+                    type="button"
+                    onClick={() => setSelectedCoverCategoryFilter('current')}
+                    className={
+                      selectedCoverCategoryFilter === 'current'
+                        ? 'btn-ed-primary'
+                        : 'btn-ed-subtle'
+                    }
+                    style={{ padding: '4px 10px', fontSize: '11px' }}
+                  >
+                    {doc.category.toUpperCase()} Designs
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setSelectedCoverCategoryFilter('all')}
+                    className={
+                      selectedCoverCategoryFilter === 'all'
+                        ? 'btn-ed-primary'
+                        : 'btn-ed-subtle'
+                    }
+                    style={{ padding: '4px 10px', fontSize: '11px' }}
+                  >
+                    All Styles
+                  </button>
+                </div>
+              </div>
+
+              {/* Cover Designs Grid */}
+              <div
+                style={{
+                  display: 'grid',
+                  gridTemplateColumns: 'repeat(auto-fit, minmax(210px, 1fr))',
+                  gap: '12px',
+                }}
+              >
+                {COVER_PAGE_DESIGNS.filter(
+                  (d) =>
+                    selectedCoverCategoryFilter === 'all' ||
+                    d.category === 'all' ||
+                    d.category === doc.category
+                ).map((design) => {
+                  const isSelected = selectedCoverDesignId === design.id;
+                  return (
+                    <div
+                      key={design.id}
+                      onClick={() => setSelectedCoverDesignId(design.id)}
+                      style={{
+                        border: isSelected
+                          ? '2px solid var(--accent-blue)'
+                          : '1px solid var(--border-stone)',
+                        backgroundColor: design.previewBg || '#F8FAFC',
+                        padding: '14px',
+                        cursor: 'pointer',
+                        display: 'flex',
+                        flexDirection: 'column',
+                        justifyContent: 'space-between',
+                        minHeight: '130px',
+                      }}
+                    >
+                      <div>
+                        <div style={{ fontWeight: 700, fontSize: '13px', color: '#0D1B4C' }}>
+                          {design.name}
+                        </div>
+                        <div
+                          style={{
+                            fontSize: '11px',
+                            color: '#475569',
+                            marginTop: '4px',
+                            lineHeight: 1.35,
+                          }}
+                        >
+                          {design.description}
+                        </div>
+                      </div>
+
+                      <div
+                        style={{
+                          marginTop: '10px',
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'space-between',
+                        }}
+                      >
+                        <span
+                          style={{
+                            fontFamily: 'var(--font-mono)',
+                            fontSize: '8.5px',
+                            textTransform: 'uppercase',
+                            color: '#64748B',
+                          }}
+                        >
+                          {design.category}
+                        </span>
+                        {isSelected && (
+                          <span
+                            style={{
+                              fontSize: '10px',
+                              fontWeight: 700,
+                              color: 'var(--accent-blue)',
+                            }}
+                          >
+                            ✓ Selected
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+
+              {/* Live Form Metadata Customization */}
+              <div
+                style={{
+                  borderTop: '1px solid var(--border-ivory)',
+                  paddingTop: '16px',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: '12px',
+                }}
+              >
+                <div style={{ fontWeight: 700, fontSize: '14px', color: 'var(--ink-navy)' }}>
+                  Cover Page Details:
+                </div>
+
+                <div className="nc-grid-2col">
+                  <div>
+                    <label className="ed-field-label">Document / Assignment Title</label>
+                    <input
+                      type="text"
+                      value={coverFormData.title}
+                      onChange={(e) =>
+                        setCoverFormData((p) => ({ ...p, title: e.target.value }))
+                      }
+                      className="ed-input"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="ed-field-label">Institution / University Name</label>
+                    <input
+                      type="text"
+                      value={coverFormData.institution}
+                      onChange={(e) =>
+                        setCoverFormData((p) => ({ ...p, institution: e.target.value }))
+                      }
+                      className="ed-input"
+                    />
+                  </div>
+                </div>
+
+                <div className="nc-grid-2col">
+                  <div>
+                    <label className="ed-field-label">Department / Faculty</label>
+                    <input
+                      type="text"
+                      value={coverFormData.department}
+                      onChange={(e) =>
+                        setCoverFormData((p) => ({ ...p, department: e.target.value }))
+                      }
+                      className="ed-input"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="ed-field-label">Course Title &amp; Code</label>
+                    <input
+                      type="text"
+                      value={coverFormData.course}
+                      onChange={(e) =>
+                        setCoverFormData((p) => ({ ...p, course: e.target.value }))
+                      }
+                      className="ed-input"
+                    />
+                  </div>
+                </div>
+
+                <div className="nc-grid-3col">
+                  <div>
+                    <label className="ed-field-label">Student Name</label>
+                    <input
+                      type="text"
+                      value={coverFormData.studentName}
+                      onChange={(e) =>
+                        setCoverFormData((p) => ({ ...p, studentName: e.target.value }))
+                      }
+                      className="ed-input"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="ed-field-label">Matric Number</label>
+                    <input
+                      type="text"
+                      value={coverFormData.matricNo}
+                      onChange={(e) =>
+                        setCoverFormData((p) => ({ ...p, matricNo: e.target.value }))
+                      }
+                      className="ed-input"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="ed-field-label">Submission Date</label>
+                    <input
+                      type="text"
+                      value={coverFormData.submissionDate}
+                      onChange={(e) =>
+                        setCoverFormData((p) => ({ ...p, submissionDate: e.target.value }))
+                      }
+                      className="ed-input"
+                    />
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div
+              style={{
+                padding: '14px 20px',
+                borderTop: '1px solid var(--border-ivory)',
+                backgroundColor: 'var(--bg-stone)',
+                display: 'flex',
+                justifyContent: 'flex-end',
+                gap: '8px',
+              }}
+            >
+              <button
+                type="button"
+                onClick={() => setShowCoverManagerModal(false)}
+                className="btn-ed-subtle"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleApplyCoverPage}
+                className="btn-ed-primary"
+                style={{ padding: '8px 18px' }}
+              >
+                Apply Cover Page to Page {coverTargetPageIndex + 1}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* =====================================================================
+          SECTION 5: WORKSPACE DOCUMENT REFERENCE SELECTOR MODAL
+      ===================================================================== */}
+      {showWorkspaceDocSelector && (
+        <div className="nc-modal-backdrop no-print" style={{ zIndex: 9999 }}>
+          <div
+            className="nc-modal-dialog"
+            style={{ maxWidth: '520px', padding: 0 }}
+          >
+            <div
+              style={{
+                padding: '16px 20px',
+                borderBottom: '1px solid var(--border-ivory)',
+                backgroundColor: 'var(--bg-ivory)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <BookOpen size={17} color="var(--accent-blue)" />
+                <h3
+                  style={{
+                    margin: 0,
+                    fontSize: '15px',
+                    fontWeight: 700,
+                    color: 'var(--ink-navy)',
+                  }}
+                >
+                  Reference Workspace Document
+                </h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowWorkspaceDocSelector(false)}
+                className="btn-ed-subtle"
+                style={{ padding: '4px' }}
+              >
+                <X size={14} />
+              </button>
+            </div>
+
+            <div style={{ padding: '16px', maxHeight: '360px', overflowY: 'auto' }}>
+              <p
+                style={{
+                  fontSize: '12px',
+                  color: 'var(--ink-muted)',
+                  margin: '0 0 12px 0',
+                }}
+              >
+                Choose an existing document to provide background context and citations to the AI:
+              </p>
+
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                {allDocuments
+                  .filter((d) => d.id !== doc.id)
+                  .map((item) => (
+                    <div
+                      key={item.id}
+                      onClick={() => handleAddWorkspaceDocReference(item)}
+                      style={{
+                        padding: '10px 12px',
+                        border: '1px solid var(--border-stone)',
+                        backgroundColor: 'var(--bg-ivory)',
+                        cursor: 'pointer',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                      }}
+                    >
+                      <div>
+                        <div style={{ fontWeight: 600, fontSize: '13px', color: 'var(--ink-navy)' }}>
+                          {item.title}
+                        </div>
+                        <div style={{ fontSize: '11px', color: 'var(--ink-muted)' }}>
+                          Category: {item.category} • Updated: {item.updatedAt}
+                        </div>
+                      </div>
+                      <span className="btn-ed-subtle" style={{ fontSize: '10px', padding: '3px 8px' }}>
+                        + Add Ref
+                      </span>
+                    </div>
+                  ))}
+                {allDocuments.filter((d) => d.id !== doc.id).length === 0 && (
+                  <div style={{ fontSize: '12px', color: 'var(--ink-muted)', padding: '12px' }}>
+                    No other documents found in this workspace. Create or import additional documents to reference them.
+                  </div>
+                )}
               </div>
             </div>
           </div>

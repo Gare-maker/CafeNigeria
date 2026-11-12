@@ -14,6 +14,19 @@ export type SyncStatus =
 
 export type DocumentStatus = 'Completed' | 'In Progress' | 'Draft' | 'Offline Draft';
 
+export interface SourceReference {
+  id: string;
+  title: string;
+  type: 'file' | 'workspace_doc' | 'web' | 'image';
+  url?: string;
+  fileSize?: string;
+  mimeType?: string;
+  thumbnail?: string;
+  snippet?: string;
+  docId?: string;
+  verified?: boolean;
+}
+
 export interface AIMessage {
   id: string;
   role: 'user' | 'assistant';
@@ -26,6 +39,7 @@ export interface AIMessage {
   targetGroupName?: string;
   targetPageIndex?: number;
   attachments?: string[];
+  sources?: SourceReference[];
 }
 
 export interface PageLayoutSettings {
@@ -42,13 +56,23 @@ export interface PageLayoutSettings {
   columnGapPx: number;
   lineSpacing?: string; // e.g. '1.15', '1.5', '2.0', '1.0'
   pageBackground: string;
-  borderStyle: 'none' | 'solid' | 'double' | 'dashed';
+  borderStyle: 'none' | 'solid' | 'double' | 'dashed' | 'dotted';
   borderWidthPx: number;
   borderColor: string;
+  borderInsetMm?: number; // distance from page edges
   headerSpacingPx: number;
   footerSpacingPx: number;
   sectionOrientations?: Record<number, 'portrait' | 'landscape'>;
   sectionColumns?: Record<number, number>;
+  sectionBorders?: Record<
+    number,
+    {
+      borderStyle: 'none' | 'solid' | 'double' | 'dashed' | 'dotted';
+      borderWidthPx: number;
+      borderColor: string;
+      borderInsetMm?: number;
+    }
+  >;
 }
 
 export const DEFAULT_PAGE_LAYOUT: PageLayoutSettings = {
@@ -68,10 +92,12 @@ export const DEFAULT_PAGE_LAYOUT: PageLayoutSettings = {
   borderStyle: 'none',
   borderWidthPx: 1,
   borderColor: '#0A194E',
+  borderInsetMm: 5,
   headerSpacingPx: 18,
   footerSpacingPx: 24,
   sectionOrientations: {},
   sectionColumns: {},
+  sectionBorders: {},
 };
 
 export const PAGE_DIMENSIONS_PX: Record<
@@ -172,6 +198,9 @@ export interface DocumentItem {
     pageGroups?: PageGroup[];
     pages?: string[];
     localFileName?: string;
+    coverPageIndex?: number; // Designated cover page index (Section 6)
+    coverPageDesignId?: string;
+    sources?: SourceReference[]; // Attached source references (Section 5)
   };
   aiHistory: AIMessage[];
 }
@@ -180,6 +209,115 @@ export interface ExportScopeOptions {
   scope: 'document' | 'group' | 'page';
   groupId?: string;
   pageIndex?: number;
+}
+
+// ============================================================================
+// BILLING, SUBSCRIPTION & AI CREDIT WALLET (Sections 11 & 12)
+// ============================================================================
+
+export type SubscriptionPlanId = 'free' | 'basic' | 'standard' | 'premium';
+
+export interface SubscriptionPlan {
+  id: SubscriptionPlanId;
+  name: string;
+  priceNgn: number;
+  monthlyCredits: number;
+  badge?: string;
+  recommended?: boolean;
+  features: string[];
+}
+
+export interface UserSubscription {
+  planId: SubscriptionPlanId;
+  status: 'active' | 'cancelled' | 'past_due' | 'trialing';
+  renewalDate: string;
+  currentPeriodStart: string;
+}
+
+export interface CreditWallet {
+  availableCredits: number;
+  totalAllocatedCredits: number;
+  consumedCredits: number;
+  breakdown: {
+    subscription: number;
+    purchased: number;
+    promotional: number;
+    adjustment: number;
+  };
+  renewalDate?: string;
+}
+
+export interface AIUsageRecord {
+  id: string;
+  timestamp: string;
+  operation: string; // 'Rewrite', 'Generate', 'Summarize', 'OCR', 'Grouping', 'Document QA', 'Comparison'
+  model: string;
+  inputTokens: number;
+  outputTokens: number;
+  cachedTokens?: number;
+  creditsDeducted: number;
+  costNgnEquivalent: number;
+  status: 'completed' | 'failed' | 'reversed';
+  documentId?: string;
+  documentTitle?: string;
+}
+
+export interface WalletTransaction {
+  id: string;
+  timestamp: string;
+  type:
+    | 'subscription_grant'
+    | 'top_up'
+    | 'usage_deduction'
+    | 'promo_bonus'
+    | 'refund';
+  credits: number; // positive or negative
+  amountNgn?: number;
+  reference: string;
+  description: string;
+  status: 'success' | 'pending' | 'failed';
+}
+
+export interface CreditTopUpBundle {
+  id: string;
+  name: string;
+  credits: number;
+  priceNgn: number;
+  bonusCredits?: number;
+  popular?: boolean;
+}
+
+// ============================================================================
+// REVENUE SHARING (40% COMPANY / 60% USER) & USER EARNINGS (Section 13)
+// ============================================================================
+
+export interface RevenueShareTransaction {
+  id: string;
+  timestamp: string;
+  description: string;
+  clientOrPayer: string;
+  grossAmountNgn: number;
+  companyShareNgn: number; // 40%
+  userShareNgn: number; // 60%
+  companyPercent: number; // 40
+  userPercent: number; // 60
+  reference: string;
+  status: 'verified' | 'pending' | 'refunded';
+  category:
+    | 'peer_review'
+    | 'freelance_formatting'
+    | 'template_sale'
+    | 'consultation';
+}
+
+export interface UserEarningsAccount {
+  grossEarningsNgn: number;
+  companyCommissionNgn: number;
+  netUserEarningsNgn: number;
+  availableBalanceNgn: number;
+  pendingBalanceNgn: number;
+  withdrawnAmountNgn: number;
+  transactions: RevenueShareTransaction[];
 }
 
 export interface CategoryMeta {

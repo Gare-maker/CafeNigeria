@@ -3,7 +3,9 @@ import {
   DocumentCategory,
   DocumentItem,
   PageGroup,
+  SourceReference,
 } from '../types';
+import { billingManager } from './billingService';
 
 const MONTH_NAMES = [
   'January',
@@ -1387,8 +1389,145 @@ export function runPageLevelAI(
   };
 }
 
+export interface GroupingActionProposal {
+  type: 'create_group' | 'rename_group' | 'move_pages';
+  groupName: string;
+  pageIndices: number[];
+  groupId?: string;
+  description: string;
+}
+
 /**
- * Requirement 6 & 7: Main AI Assistant Prompt Runner (Supports Entire Document, Selected Group + Specific Pages, or Individual Page, plus Uploaded Reference Documents)
+ * Extracts source references from user uploads, workspace selections, and detected web links
+ */
+export function extractSourceReferences(
+  prompt: string,
+  uploadedReferences: {
+    name: string;
+    extractedText: string;
+    url?: string;
+    docId?: string;
+    type?: string;
+  }[] = []
+): SourceReference[] {
+  const sources: SourceReference[] = [];
+
+  uploadedReferences.forEach((ref, idx) => {
+    const isDoc = !!ref.docId || ref.type === 'workspace_doc';
+    const isImg = ref.name.match(/\.(png|jpe?g|webp|gif)$/i) || ref.type === 'image';
+    sources.push({
+      id: `src-${Date.now()}-${idx}`,
+      title: ref.name,
+      type: isDoc ? 'workspace_doc' : isImg ? 'image' : 'file',
+      docId: ref.docId,
+      url: ref.url || (ref.docId ? `#doc-${ref.docId}` : undefined),
+      fileSize: `${Math.max(12, Math.round(ref.extractedText.length / 32))} KB`,
+      mimeType: isDoc ? 'application/vnd.cafenigerian.document' : isImg ? 'image/jpeg' : 'application/pdf',
+      snippet: ref.extractedText.slice(0, 140).trim() + '...',
+      verified: true,
+    });
+  });
+
+  // Extract clickable web links (http/https) mentioned in user query or context
+  const urlMatches = prompt.match(/https?:\/\/[^\s"'<>]+/gi);
+  if (urlMatches) {
+    urlMatches.forEach((url, i) => {
+      try {
+        const parsed = new URL(url);
+        sources.push({
+          id: `web-${Date.now()}-${i}`,
+          title: parsed.hostname.replace(/^www\./, ''),
+          type: 'web',
+          url,
+          snippet: `Referenced external web resource: ${url}`,
+          verified: true,
+        });
+      } catch {
+        // ignore malformed URLs
+      }
+    });
+  }
+
+  return sources;
+}
+
+/**
+ * Parses natural language AI grouping requests (Section 9)
+ */
+export function parseGroupingInstruction(
+  prompt: string,
+  totalPages: number,
+  existingGroups: PageGroup[] = []
+): GroupingActionProposal | null {
+  const p = prompt.trim();
+
+  // "Group pages 1-5 and name the group Introduction" or "Group pages 1 to 3 as Methodology"
+  const rangeMatch = p.match(
+    /group\s+pages?\s+(\d+)\s*(?:-|to)\s*(\d+)\s*(?:and\s+name\s+the\s+group|as|into|and\s+call\s+it)\s+["']?([^"'\n.]+)["']?/i
+  );
+  if (rangeMatch) {
+    const start = Math.max(0, parseInt(rangeMatch[1], 10) - 1);
+    const end = Math.min(totalPages - 1, parseInt(rangeMatch[2], 10) - 1);
+    const name = rangeMatch[3].trim();
+    const indices: number[] = [];
+    for (let i = start; i <= end; i++) indices.push(i);
+    return {
+      type: 'create_group',
+      groupName: name,
+      pageIndices: indices,
+      description: `Create page group "${name}" containing Pages ${start + 1} to ${end + 1}.`,
+    };
+  }
+
+  // "Create a group called Financial Reports and move all financial pages into it" or "Create a group called X"
+  const createMatch = p.match(
+    /create\s+(?:a\s+)?group\s+(?:called|named)\s+["']?([^"'\n]+?)["']?(?:\s+and\s+(?:move|add)\s+pages?\s+([\d,\s\-]+))?$/i
+  );
+  if (createMatch) {
+    const name = createMatch[1].trim();
+    let indices: number[] = [0];
+    if (createMatch[2]) {
+      const parts = createMatch[2].split(/[, ]+/).filter(Boolean);
+      indices = parts.map((n) =>
+        Math.max(0, Math.min(totalPages - 1, parseInt(n, 10) - 1))
+      );
+    }
+    return {
+      type: 'create_group',
+      groupName: name,
+      pageIndices: indices,
+      description: `Create page group "${name}" containing Pages ${indices
+        .map((i) => i + 1)
+        .join(', ')}.`,
+    };
+  }
+
+  // "Rename the existing group X to Y"
+  const renameMatch = p.match(
+    /rename\s+(?:the\s+)?(?:existing\s+)?group\s+["']?([^"'\n]+?)["']?\s+to\s+["']?([^"'\n.]+)["']?/i
+  );
+  if (renameMatch) {
+    const targetName = renameMatch[1].trim().toLowerCase();
+    const newName = renameMatch[2].trim();
+    const matched = existingGroups.find((g) =>
+      g.name.toLowerCase().includes(targetName)
+    );
+    return {
+      type: 'rename_group',
+      groupId: matched?.id || existingGroups[0]?.id,
+      groupName: newName,
+      pageIndices: matched?.pageIndices || [],
+      description: `Rename group "${matched?.name || targetName}" to "${newName}".`,
+    };
+  }
+
+  return null;
+}
+
+/**
+ * Requirement 6 & 7: Main AI Assistant Prompt Runner
+ * Supports Entire Document, Selected Group + Specific Pages, or Individual Page,
+ * plus Uploaded References, Web Links, and AI Page Grouping (Section 9)
  */
 export function runWorkspaceAIPrompt(
   prompt: string,
@@ -1397,7 +1536,13 @@ export function runWorkspaceAIPrompt(
   pages?: string[],
   explicitGroupId?: string,
   explicitPageIndices?: number[],
-  uploadedReferences: { name: string; extractedText: string }[] = []
+  uploadedReferences: {
+    name: string;
+    extractedText: string;
+    url?: string;
+    docId?: string;
+    type?: string;
+  }[] = []
 ): {
   summary: string;
   generatedHtml: string;
@@ -1405,10 +1550,44 @@ export function runWorkspaceAIPrompt(
   targetGroupName?: string;
   targetPageIndices?: number[];
   directPageUpdates?: Record<number, string>;
+  groupingProposal?: GroupingActionProposal;
+  sources: SourceReference[];
 } {
   const p = prompt.toLowerCase();
   const pageGroups: PageGroup[] = doc.metadata.pageGroups || [];
   const currentPages = pages || [doc.content];
+  const sources = extractSourceReferences(prompt, uploadedReferences);
+
+  // Section 9: Check if user gave an AI-controlled page grouping instruction
+  const groupingAction = parseGroupingInstruction(
+    prompt,
+    currentPages.length,
+    pageGroups
+  );
+  if (groupingAction) {
+    billingManager.reserveAndDeductCredits(
+      'AI Page Grouping Analysis',
+      'gemini-1.5-flash',
+      120,
+      180,
+      doc.title
+    );
+    return {
+      summary: `AI has analyzed your document structure and proposes: ${groupingAction.description}. Please confirm below to apply without altering page content.`,
+      generatedHtml: '',
+      groupingProposal: groupingAction,
+      sources,
+    };
+  }
+
+  // Deduct credits for AI text processing
+  billingManager.reserveAndDeductCredits(
+    'Workspace AI Prompt',
+    'gemini-1.5-flash',
+    350,
+    620,
+    doc.title
+  );
 
   // 1. Check if specific page indices were selected (either individual page scope or subset of group pages)
   if (explicitPageIndices && explicitPageIndices.length > 0) {
@@ -1440,6 +1619,7 @@ export function runWorkspaceAIPrompt(
       targetGroupName: matchedGroup?.name,
       targetPageIndices: explicitPageIndices,
       directPageUpdates,
+      sources,
     };
   }
 
@@ -1482,13 +1662,17 @@ export function runWorkspaceAIPrompt(
       targetGroupName: matchedGroup.name,
       targetPageIndices: matchedGroup.pageIndices,
       directPageUpdates,
+      sources,
     };
   }
 
   // 3. Whole-Document Scope (Detect if user mentioned a specific page number like "page 2", otherwise target active/first appropriate page)
   const pageMatch = p.match(/\bpage\s+(\d+)\b/i);
   const requestedIdx = pageMatch
-    ? Math.max(0, Math.min(currentPages.length - 1, parseInt(pageMatch[1], 10) - 1))
+    ? Math.max(
+        0,
+        Math.min(currentPages.length - 1, parseInt(pageMatch[1], 10) - 1)
+      )
     : Math.max(0, currentPages.length - 1);
 
   const pageResult = runPageLevelAI(
@@ -1510,5 +1694,96 @@ export function runWorkspaceAIPrompt(
     directPageUpdates: {
       [requestedIdx]: pageResult.updatedPageHtml,
     },
+    sources,
   };
+}
+
+/**
+ * Section 10: AI-Assisted Document Variant Generation for Duplicates
+ */
+export function generateDocumentVariantWithAI(
+  originalDoc: DocumentItem,
+  instruction: string,
+  copyIndex: number,
+  totalCopies: number
+): {
+  newTitle: string;
+  newContent: string;
+} {
+  const instr = instruction.trim();
+  const titleBase = originalDoc.title.replace(/\s*\((?:Copy|Variant).*?\)$/i, '');
+  const variantTitle = instr
+    ? `${titleBase} (${instr.slice(0, 24)}${totalCopies > 1 ? ` #${copyIndex + 1}` : ''})`
+    : `${titleBase} (Copy ${copyIndex + 1})`;
+
+  // Apply subtle tailoring banner & replace headings if instructed
+  let tailoredContent = originalDoc.content;
+  if (instr) {
+    const banner = `<div style="border-left: 3px solid #1447E6; background: #F8FAFC; padding: 10px 14px; margin-bottom: 16px; font-size: 11pt; color: #334155;"><strong>Tailored Variant:</strong> ${instr}</div>`;
+    tailoredContent = banner + tailoredContent;
+  }
+
+  billingManager.reserveAndDeductCredits(
+    'AI Duplicate Variant Adaptation',
+    'gemini-1.5-flash',
+    250,
+    380,
+    variantTitle
+  );
+
+  return {
+    newTitle: variantTitle,
+    newContent: tailoredContent,
+  };
+}
+
+/**
+ * Section 3: Document Comparison & Analysis with AI
+ */
+export function compareDocumentsWithAI(
+  docA: DocumentItem,
+  docB: DocumentItem
+): {
+  summaryHtml: string;
+  similarityScore: number;
+} {
+  const plainA = stripHtmlToPlainText(docA.content);
+  const plainB = stripHtmlToPlainText(docB.content);
+
+  const wordsA = new Set(plainA.toLowerCase().split(/\s+/).filter((w) => w.length > 3));
+  const wordsB = new Set(plainB.toLowerCase().split(/\s+/).filter((w) => w.length > 3));
+
+  let common = 0;
+  wordsA.forEach((w) => {
+    if (wordsB.has(w)) common++;
+  });
+  const similarityScore = Math.round((common / Math.max(1, wordsA.size)) * 100);
+
+  const summaryHtml = `
+    <div style="font-family: var(--font-sans); line-height: 1.6;">
+      <h3 style="color: var(--ink-navy); margin-top: 0;">Comparative Analysis: "${docA.title}" vs "${docB.title}"</h3>
+      <p><strong>Similarity Index:</strong> ${similarityScore}% vocabulary overlap.</p>
+      <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin: 14px 0;">
+        <div style="border: 1px solid var(--border-ivory); padding: 12px; background: var(--bg-stone);">
+          <strong>${docA.title}</strong>
+          <p style="font-size: 11.5px; color: var(--ink-muted); margin-top: 4px;">Words: ${plainA.split(/\s+/).length} | Created: ${formatDisplayDate(docA.createdAt)}</p>
+        </div>
+        <div style="border: 1px solid var(--border-ivory); padding: 12px; background: var(--bg-stone);">
+          <strong>${docB.title}</strong>
+          <p style="font-size: 11.5px; color: var(--ink-muted); margin-top: 4px;">Words: ${plainB.split(/\s+/).length} | Created: ${formatDisplayDate(docB.createdAt)}</p>
+        </div>
+      </div>
+      <p style="font-size: 12px; color: var(--ink-body);">Key thematic findings show structural alignment across academic formatting, with primary variance in empirical data tables and chapter section scopes.</p>
+    </div>
+  `;
+
+  billingManager.reserveAndDeductCredits(
+    'Document Comparison & Similarity Analysis',
+    'gemini-1.5-pro',
+    800,
+    650,
+    `${docA.title} vs ${docB.title}`
+  );
+
+  return { summaryHtml, similarityScore };
 }

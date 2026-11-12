@@ -3,6 +3,7 @@ import { DocumentCategory, DocumentItem } from './types';
 import {
   INITIAL_DOCUMENTS,
   getCurrentFormattedDate,
+  generateDocumentVariantWithAI,
 } from './services/aiGenerator';
 import {
   exportToDocx,
@@ -137,20 +138,47 @@ export function App() {
     );
   };
 
-  const handleDuplicateDocument = (docId: string) => {
+  const handleDuplicateDocument = (
+    docId: string,
+    count: number = 1,
+    aiInstruction?: string
+  ) => {
     const target = documents.find((d) => d.id === docId);
     if (!target) return;
     const timestamp = getCurrentFormattedDate();
+    const clampedCount = Math.max(1, Math.min(10, count));
+    const newCopies: DocumentItem[] = [];
 
-    const copy: DocumentItem = {
-      ...target,
-      id: `doc-${Date.now()}`,
-      title: `${target.title} (Copy)`,
-      createdAt: timestamp,
-      updatedAt: timestamp,
-      syncStatus: isOnline ? 'saved' : 'offline-pending',
-    };
-    setDocuments((prev) => [copy, ...prev]);
+    for (let i = 0; i < clampedCount; i++) {
+      let copyTitle =
+        clampedCount > 1
+          ? `${target.title} (Copy ${i + 1})`
+          : `${target.title} (Copy)`;
+      let copyContent = target.content;
+
+      if (aiInstruction && aiInstruction.trim()) {
+        const variant = generateDocumentVariantWithAI(
+          target,
+          aiInstruction.trim(),
+          i,
+          clampedCount
+        );
+        copyTitle = variant.newTitle;
+        copyContent = variant.newContent;
+      }
+
+      newCopies.push({
+        ...target,
+        id: `doc-${Date.now()}-${i}`,
+        title: copyTitle,
+        content: copyContent,
+        createdAt: timestamp,
+        updatedAt: timestamp,
+        syncStatus: isOnline ? 'saved' : 'offline-pending',
+      });
+    }
+
+    setDocuments((prev) => [...newCopies, ...prev]);
   };
 
   const handleDeleteDocument = (docId: string) => {
@@ -280,6 +308,8 @@ export function App() {
             onExportPdf={exportToPdf}
             onExportTxt={exportToTxt}
             onSaveToComputer={handleSaveToComputer}
+            allDocuments={documents}
+            onNavigateSettings={() => setActiveView('settings')}
           />
         )}
 
@@ -294,6 +324,8 @@ export function App() {
             pendingSyncCount={pendingSyncCount}
             onForceSyncNow={triggerReconnectionSync}
             totalDocuments={documents.length}
+            darkMode={darkMode}
+            onToggleDarkMode={() => setDarkMode((d) => !d)}
             onResetDemoData={() => {
               setDocuments(INITIAL_DOCUMENTS);
               localStorage.setItem(

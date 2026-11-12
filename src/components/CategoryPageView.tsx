@@ -27,7 +27,11 @@ interface CategoryPageViewProps {
   onBackHome: () => void;
   onOpenDocument: (docId: string) => void;
   onRenameDocument: (docId: string, newTitle: string) => void;
-  onDuplicateDocument: (docId: string) => void;
+  onDuplicateDocument: (
+    docId: string,
+    count?: number,
+    aiInstruction?: string
+  ) => void;
   onDeleteDocument: (docId: string) => void;
   onSaveToComputer?: (doc: DocumentItem) => void;
   onOpenFromComputer?: () => void;
@@ -74,6 +78,9 @@ export const CategoryPageView: React.FC<CategoryPageViewProps> = ({
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editingTitle, setEditingTitle] = useState('');
   const [docToDelete, setDocToDelete] = useState<DocumentItem | null>(null);
+  const [duplicateTarget, setDuplicateTarget] = useState<DocumentItem | null>(null);
+  const [duplicateCount, setDuplicateCount] = useState<number>(1);
+  const [duplicateAiPrompt, setDuplicateAiPrompt] = useState<string>('');
 
   const pageCopy = CATEGORY_PAGE_COPY[category];
 
@@ -495,10 +502,14 @@ export const CategoryPageView: React.FC<CategoryPageViewProps> = ({
                           <Edit3 size={12} />
                         </button>
                         <button
-                          onClick={() => onDuplicateDocument(doc.id)}
+                          onClick={() => {
+                            setDuplicateTarget(doc);
+                            setDuplicateCount(1);
+                            setDuplicateAiPrompt('');
+                          }}
                           className="btn-ed-subtle"
                           style={{ padding: '5px 7px' }}
-                          title="Duplicate"
+                          title="Duplicate File"
                         >
                           <Copy size={12} />
                         </button>
@@ -628,7 +639,11 @@ export const CategoryPageView: React.FC<CategoryPageViewProps> = ({
                           Rename
                         </button>
                         <button
-                          onClick={() => onDuplicateDocument(doc.id)}
+                          onClick={() => {
+                            setDuplicateTarget(doc);
+                            setDuplicateCount(1);
+                            setDuplicateAiPrompt('');
+                          }}
                           className="btn-ed-subtle"
                         >
                           Duplicate
@@ -772,6 +787,226 @@ export const CategoryPageView: React.FC<CategoryPageViewProps> = ({
                 }}
               >
                 Delete File
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* File Duplication & AI-Assisted Variants Dialog (Section 10) */}
+      {duplicateTarget && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          style={{
+            position: 'fixed',
+            inset: 0,
+            backgroundColor: 'rgba(10, 25, 78, 0.52)',
+            backdropFilter: 'blur(3px)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 1000,
+            padding: '16px',
+          }}
+          onClick={() => setDuplicateTarget(null)}
+        >
+          <div
+            style={{
+              backgroundColor: 'var(--bg-white)',
+              border: '2px solid var(--border-ivory)',
+              maxWidth: '500px',
+              width: '100%',
+              padding: '24px',
+              boxShadow: '0 20px 45px -10px rgba(0, 0, 0, 0.3)',
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '10px',
+                marginBottom: '14px',
+              }}
+            >
+              <Copy size={20} color="var(--accent-blue)" />
+              <div>
+                <h3
+                  style={{
+                    margin: 0,
+                    fontSize: '16px',
+                    fontWeight: 700,
+                    color: 'var(--ink-navy)',
+                  }}
+                >
+                  Duplicate File
+                </h3>
+                <span
+                  className="mono-label"
+                  style={{ fontSize: '9px', color: 'var(--ink-muted)' }}
+                >
+                  Create Independent Copies &amp; Variants
+                </span>
+              </div>
+            </div>
+
+            <p
+              style={{
+                fontSize: '13px',
+                color: 'var(--ink-body)',
+                lineHeight: 1.5,
+                margin: '0 0 16px',
+              }}
+            >
+              Duplicating{' '}
+              <strong style={{ color: 'var(--ink-navy)' }}>
+                &ldquo;{duplicateTarget.title}&rdquo;
+              </strong>
+              . The original file will remain completely untouched.
+            </p>
+
+            <div
+              style={{
+                display: 'flex',
+                flexDirection: 'column',
+                gap: '14px',
+                marginBottom: '20px',
+              }}
+            >
+              <div>
+                <label className="ed-field-label">
+                  Number of Duplicates to Create (1 to 10)
+                </label>
+                <input
+                  type="number"
+                  min={1}
+                  max={10}
+                  value={duplicateCount}
+                  onChange={(e) => {
+                    const parsed = parseInt(e.target.value, 10);
+                    setDuplicateCount(
+                      isNaN(parsed) ? 1 : Math.max(1, Math.min(10, parsed))
+                    );
+                  }}
+                  className="ed-input"
+                  style={{ width: '100%', padding: '8px 12px' }}
+                />
+              </div>
+
+              <div>
+                <label className="ed-field-label">
+                  Optional AI-Assisted Adaptation
+                </label>
+                <textarea
+                  rows={2}
+                  value={duplicateAiPrompt}
+                  onChange={(e) => setDuplicateAiPrompt(e.target.value)}
+                  placeholder="e.g. Tailor this proposal for client ABC, or adapt this variant for Lagos State..."
+                  className="ed-input"
+                  style={{
+                    width: '100%',
+                    padding: '8px 12px',
+                    fontSize: '12.5px',
+                    resize: 'none',
+                  }}
+                />
+                <span
+                  style={{
+                    fontSize: '10.5px',
+                    color: 'var(--ink-muted)',
+                    marginTop: '4px',
+                    display: 'block',
+                  }}
+                >
+                  Leave blank to create standard identical copies.
+                </span>
+              </div>
+
+              {/* Preview of Generated Files */}
+              <div
+                style={{
+                  padding: '10px 12px',
+                  backgroundColor: 'var(--bg-stone)',
+                  border: '1px solid var(--border-stone)',
+                }}
+              >
+                <span
+                  className="ed-field-label"
+                  style={{ marginBottom: '4px' }}
+                >
+                  Preview Generated Copy Names:
+                </span>
+                <div
+                  style={{
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: '3px',
+                    fontSize: '11px',
+                    color: 'var(--ink-navy)',
+                  }}
+                >
+                  {Array.from({ length: duplicateCount }).map((_, idx) => (
+                    <div
+                      key={idx}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '6px',
+                      }}
+                    >
+                      <span
+                        style={{ color: 'var(--accent-blue)', fontWeight: 700 }}
+                      >
+                        •
+                      </span>
+                      <span>
+                        {duplicateAiPrompt.trim()
+                          ? `${duplicateTarget.title} (${duplicateAiPrompt.slice(0, 20)}${duplicateCount > 1 ? ` #${idx + 1}` : ''})`
+                          : duplicateCount > 1
+                          ? `${duplicateTarget.title} (Copy ${idx + 1})`
+                          : `${duplicateTarget.title} (Copy)`}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            <div
+              style={{
+                display: 'flex',
+                justifyContent: 'flex-end',
+                gap: '10px',
+              }}
+            >
+              <button
+                type="button"
+                onClick={() => setDuplicateTarget(null)}
+                className="btn-ed-subtle"
+                style={{ padding: '8px 16px', fontSize: '12px' }}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  onDuplicateDocument(
+                    duplicateTarget.id,
+                    duplicateCount,
+                    duplicateAiPrompt
+                  );
+                  setDuplicateTarget(null);
+                }}
+                className="btn-ed-primary"
+                style={{
+                  padding: '8px 18px',
+                  fontSize: '12px',
+                  fontWeight: 600,
+                }}
+              >
+                Duplicate{' '}
+                {duplicateCount > 1 ? `(${duplicateCount} Files)` : 'File'}
               </button>
             </div>
           </div>
