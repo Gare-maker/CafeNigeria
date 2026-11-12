@@ -573,11 +573,17 @@ async function renderPageToCanvas(
   ctx.fillRect(0, 0, pageW, pageH);
 
   // Page Border if configured
-  if (layout && layout.borderStyle !== 'none') {
+  if (layout && layout.borderStyle && layout.borderStyle !== 'none') {
     ctx.save();
     ctx.strokeStyle = layout.borderColor || '#0A194E';
-    ctx.lineWidth = layout.borderWidthPx || 1;
-    ctx.strokeRect(12, 12, pageW - 24, pageH - 24);
+    ctx.lineWidth = layout.borderWidthPx || 2;
+    if (layout.borderStyle === 'dotted') {
+      ctx.setLineDash([ctx.lineWidth, ctx.lineWidth * 1.8]);
+    } else if (layout.borderStyle === 'dashed') {
+      ctx.setLineDash([8, 4]);
+    }
+    const insetPx = Math.round((layout.borderInsetMm ?? 10) * 3.78);
+    ctx.strokeRect(insetPx, insetPx, pageW - (insetPx * 2), pageH - (insetPx * 2));
     ctx.restore();
   }
 

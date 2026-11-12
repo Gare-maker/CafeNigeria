@@ -113,11 +113,10 @@ export const CreateDocumentModal: React.FC<CreateDocumentModalProps> = ({
   const streamIntervalRef = useRef<number | null>(null);
   const mediaStreamRef = useRef<MediaStream | null>(null);
   const gotNativeResultRef = useRef<boolean>(false);
+  const basePromptRef = useRef<string>('');
 
   // Auto-expand textarea vertically
-  const combinedInputText = interimTranscript
-    ? `${prompt}${prompt ? ' ' : ''}${interimTranscript}`
-    : prompt;
+  const combinedInputText = prompt;
 
   useEffect(() => {
     const el = textareaRef.current;
@@ -150,21 +149,15 @@ export const CreateDocumentModal: React.FC<CreateDocumentModalProps> = ({
     cleanupRecording();
     setIsRecording(false);
     setRecordingMessage('');
-    if (interimTranscript.trim()) {
-      setPrompt((prev) =>
-        prev
-          ? `${prev.trim()} ${interimTranscript.trim()}`
-          : interimTranscript.trim()
-      );
-      setInterimTranscript('');
-    }
+    setInterimTranscript('');
   };
 
   const startVoiceRecording = async () => {
     setMicError('');
     setIsRecording(true);
-    setRecordingMessage('Listening... speak clearly into your microphone.');
+    setRecordingMessage('Listening... as you speak it writes live.');
     gotNativeResultRef.current = false;
+    basePromptRef.current = prompt;
 
     try {
       if (
@@ -189,24 +182,30 @@ export const CreateDocumentModal: React.FC<CreateDocumentModalProps> = ({
         recognitionRef.current = recognition;
         recognition.continuous = true;
         recognition.interimResults = true;
-        recognition.lang = 'en-NG';
+        try {
+          recognition.lang = navigator.language || 'en-NG';
+        } catch {
+          recognition.lang = 'en-US';
+        }
 
         recognition.onresult = (event: any) => {
           gotNativeResultRef.current = true;
+          let sessionTranscript = '';
           let currentInterim = '';
-          for (let i = event.resultIndex; i < event.results.length; ++i) {
+          for (let i = 0; i < event.results.length; ++i) {
             const transcriptChunk = event.results[i][0].transcript;
-            if (event.results[i].isFinal) {
-              setPrompt((prev) =>
-                prev
-                  ? `${prev.trim()} ${transcriptChunk.trim()}`
-                  : transcriptChunk.trim()
-              );
-            } else {
+            sessionTranscript += transcriptChunk;
+            if (!event.results[i].isFinal) {
               currentInterim += transcriptChunk;
             }
           }
           setInterimTranscript(currentInterim);
+          const base = basePromptRef.current.trim();
+          const cleanSession = sessionTranscript.trim();
+          const combined = base
+            ? (cleanSession ? `${base} ${cleanSession}` : base)
+            : cleanSession;
+          setPrompt(combined);
         };
 
         recognition.onerror = (e: any) => {

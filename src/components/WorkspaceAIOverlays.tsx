@@ -16,51 +16,45 @@ import {
 import { CanvasImageElement, DrawingElement } from '../types';
 
 /**
- * Reusable Voice-to-Text Hook for all AI interfaces (Requirement 8)
+ * Reusable Voice-to-Text Hook for all AI interfaces (Instant live dictation)
+ * Writes into the input immediately in real-time as the user speaks.
  */
 export function useVoiceToText(
   onTranscriptUpdate: (updater: (prev: string) => string) => void,
-  fallbackSampleText: string
+  _fallbackSampleText?: string
 ) {
   const [isRecording, setIsRecording] = useState(false);
   const [interimText, setInterimText] = useState('');
   const recognitionRef = useRef<any>(null);
-  const streamTimerRef = useRef<number | null>(null);
-  const gotNativeRef = useRef(false);
+  const baseTextRef = useRef<string>('');
+  const isStartedRef = useRef(false);
 
   const stopRecording = () => {
+    isStartedRef.current = false;
     if (recognitionRef.current) {
       try {
         recognitionRef.current.onend = null;
+        recognitionRef.current.onerror = null;
+        recognitionRef.current.onresult = null;
         recognitionRef.current.stop();
       } catch {
         // ignore
       }
       recognitionRef.current = null;
     }
-    if (streamTimerRef.current) {
-      window.clearInterval(streamTimerRef.current);
-      streamTimerRef.current = null;
-    }
-    if (interimText.trim()) {
-      const chunk = interimText.trim();
-      onTranscriptUpdate((prev) => (prev ? `${prev.trim()} ${chunk}` : chunk));
-      setInterimText('');
-    }
+    setInterimText('');
     setIsRecording(false);
   };
 
   useEffect(() => {
     return () => {
+      isStartedRef.current = false;
       if (recognitionRef.current) {
         try {
           recognitionRef.current.stop();
         } catch {
           // ignore
         }
-      }
-      if (streamTimerRef.current) {
-        window.clearInterval(streamTimerRef.current);
       }
     };
   }, []);
@@ -72,67 +66,83 @@ export function useVoiceToText(
     }
 
     setInterimText('');
-    gotNativeRef.current = false;
-    setIsRecording(true);
-
     const SpeechRecognition =
       (window as any).SpeechRecognition ||
       (window as any).webkitSpeechRecognition;
 
-    if (SpeechRecognition) {
-      try {
-        const rec = new SpeechRecognition();
-        rec.lang = 'en-NG';
-        rec.continuous = true;
-        rec.interimResults = true;
-        rec.onresult = (event: any) => {
-          gotNativeRef.current = true;
-          let finalStr = '';
-          let interimStr = '';
-          for (let i = event.resultIndex; i < event.results.length; i++) {
-            const piece = event.results[i][0].transcript;
-            if (event.results[i].isFinal) {
-              finalStr += piece + ' ';
-            } else {
-              interimStr += piece;
-            }
-          }
-          if (finalStr.trim()) {
-            const cleanFinal = finalStr.trim();
-            onTranscriptUpdate((prev) =>
-              prev ? `${prev.trim()} ${cleanFinal}` : cleanFinal
-            );
-          }
-          setInterimText(interimStr);
-        };
-        recognitionRef.current = rec;
-        rec.start();
-      } catch {
-        // Fallback stream below
-      }
+    if (!SpeechRecognition) {
+      console.warn('SpeechRecognition API not available in this browser environment.');
+      return;
     }
 
-    window.setTimeout(() => {
-      if (!gotNativeRef.current) {
-        const words = fallbackSampleText.split(' ');
-        let idx = 0;
-        streamTimerRef.current = window.setInterval(() => {
-          if (gotNativeRef.current) {
-            if (streamTimerRef.current) {
-              window.clearInterval(streamTimerRef.current);
-              streamTimerRef.current = null;
-            }
-            return;
+    try {
+      const rec = new SpeechRecognition();
+      try {
+        rec.lang = navigator.language || 'en-NG';
+      } catch {
+        rec.lang = 'en-US';
+      }
+      rec.continuous = true;
+      rec.interimResults = true;
+      rec.maxAlternatives = 1;
+
+      // Capture pre-existing text so live dictation appends seamlessly
+      onTranscriptUpdate((prev) => {
+        baseTextRef.current = prev || '';
+        return prev;
+      });
+
+      rec.onresult = (event: any) => {
+        let fullSessionTranscript = '';
+        let currentInterim = '';
+
+        for (let i = 0; i < event.results.length; i++) {
+          const res = event.results[i];
+          const transcriptChunk = res[0]?.transcript || '';
+          fullSessionTranscript += transcriptChunk;
+          if (!res.isFinal) {
+            currentInterim += transcriptChunk;
           }
-          if (idx < words.length) {
-            const w = words[idx++];
-            onTranscriptUpdate((prev) => (prev ? `${prev} ${w}` : w));
-          } else {
+        }
+
+        setInterimText(currentInterim);
+
+        // Immediate write as words are uttered
+        const base = baseTextRef.current.trim();
+        const session = fullSessionTranscript.trim();
+        const combined = base ? (session ? `${base} ${session}` : base) : session;
+        onTranscriptUpdate(() => combined);
+      };
+
+      rec.onerror = (e: any) => {
+        if (e.error === 'no-speech') {
+          return;
+        }
+        console.warn('SpeechRecognition error:', e.error);
+        if (e.error === 'not-allowed' || e.error === 'service-not-allowed') {
+          stopRecording();
+        }
+      };
+
+      rec.onend = () => {
+        if (isStartedRef.current) {
+          try {
+            rec.start();
+          } catch {
             stopRecording();
           }
-        }, 140);
-      }
-    }, 1000);
+        }
+      };
+
+      recognitionRef.current = rec;
+      isStartedRef.current = true;
+      setIsRecording(true);
+      rec.start();
+    } catch (err) {
+      console.warn('Could not initialize SpeechRecognition:', err);
+      setIsRecording(false);
+      isStartedRef.current = false;
+    }
   };
 
   return { isRecording, interimText, toggleRecording, stopRecording };
@@ -162,15 +172,10 @@ export const TextSelectionAIPopup: React.FC<TextSelectionAIPopupProps> = ({
   const [instruction, setInstruction] = useState('');
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
-  const { isRecording, interimText, toggleRecording, stopRecording } =
-    useVoiceToText(
-      setInstruction,
-      'Rewrite this paragraph in a clearer more formal academic tone and correct any grammatical errors.'
-    );
+  const { isRecording, toggleRecording, stopRecording } =
+    useVoiceToText(setInstruction);
 
-  const displayValue = interimText
-    ? `${instruction}${instruction ? ' ' : ''}${interimText}`
-    : instruction;
+  const displayValue = instruction;
 
   // Requirement 9: Auto-expand textarea
   useEffect(() => {
@@ -197,10 +202,19 @@ export const TextSelectionAIPopup: React.FC<TextSelectionAIPopupProps> = ({
 
   if (!isOpen) {
     // Step 1: Small AI Icon at the top-right corner of the highlighted selection
+    // Preserves native browser selection without layout shift
     return (
       <button
         type="button"
         onMouseDown={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+        }}
+        onMouseUp={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+        }}
+        onClick={(e) => {
           e.preventDefault();
           e.stopPropagation();
           onOpenPopup();
@@ -447,15 +461,10 @@ export const PageLevelAIPopover: React.FC<PageLevelAIPopoverProps> = ({
   >([]);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
-  const { isRecording, interimText, toggleRecording, stopRecording } =
-    useVoiceToText(
-      setInstruction,
-      'Organise the information on this page into a clean comparison table and improve the arrangement of the headings.'
-    );
+  const { isRecording, toggleRecording, stopRecording } =
+    useVoiceToText(setInstruction);
 
-  const displayValue = interimText
-    ? `${instruction}${instruction ? ' ' : ''}${interimText}`
-    : instruction;
+  const displayValue = instruction;
 
   useEffect(() => {
     const el = textareaRef.current;

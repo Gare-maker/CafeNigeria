@@ -8,16 +8,12 @@ import {
   ArrowLeft,
   CreditCard,
   Coins,
-  TrendingUp,
   CheckCircle2,
-  ShieldCheck,
   Building2,
   Sparkles,
   Sun,
   Moon,
   PlusCircle,
-  Send,
-  Zap,
 } from 'lucide-react';
 import {
   billingManager,
@@ -31,7 +27,6 @@ import {
   UserSubscription,
   AIUsageRecord,
   WalletTransaction,
-  UserEarningsAccount,
 } from '../types';
 
 interface SettingsViewProps {
@@ -48,7 +43,6 @@ interface SettingsViewProps {
 
 type SettingsTab =
   | 'subscription'
-  | 'earnings'
   | 'account'
   | 'offline';
 
@@ -78,9 +72,6 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   const [transactions, setTransactions] = useState<WalletTransaction[]>(() =>
     billingManager.getTransactions()
   );
-  const [earningsAccount, setEarningsAccount] = useState<UserEarningsAccount>(
-    () => billingManager.getEarningsAccount()
-  );
 
   // Subscribe to BillingManager updates
   useEffect(() => {
@@ -89,7 +80,6 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
       setWallet(billingManager.getWallet());
       setUsageHistory(billingManager.getUsageHistory());
       setTransactions(billingManager.getTransactions());
-      setEarningsAccount(billingManager.getEarningsAccount());
     });
     return unsubscribe;
   }, []);
@@ -103,24 +93,11 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   );
   const [defaultRefStyle, setDefaultRefStyle] = useState('APA 7th Edition');
   const [defaultFont, setDefaultFont] = useState('Times New Roman');
+  const [geminiApiKey, setGeminiApiKey] = useState<string>(() => {
+    return localStorage.getItem('nc_gemini_api_key') || '';
+  });
   const [savedNotice, setSavedNotice] = useState(false);
   const [actionNotice, setActionNotice] = useState<string | null>(null);
-
-  // Withdrawal Form State
-  const [withdrawAmount, setWithdrawAmount] = useState<string>('5000');
-  const [bankName, setBankName] = useState<string>('GTBank');
-  const [accountNumber, setAccountNumber] = useState<string>('0123456789');
-  const [accountName, setAccountName] = useState<string>('Nigerian Cafe Operator');
-
-  // New Revenue Transaction Simulation Form
-  const [simClient, setSimClient] = useState<string>('Dr. Amina Bello (ABU Zaria)');
-  const [simDesc, setSimDesc] = useState<string>(
-    'Dissertation Review & Statistical Table Verification'
-  );
-  const [simAmount, setSimAmount] = useState<string>('15000');
-  const [simCategory, setSimCategory] = useState<
-    'freelance_formatting' | 'peer_review' | 'template_sale' | 'consultation'
-  >('freelance_formatting');
 
   const showNotification = (msg: string) => {
     setActionNotice(msg);
@@ -143,33 +120,10 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     }
   };
 
-  const handleWithdrawalSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    const amount = parseInt(withdrawAmount, 10);
-    if (isNaN(amount) || amount <= 0) {
-      alert('Please enter a valid withdrawal amount.');
-      return;
-    }
-    const res = billingManager.requestWithdrawal(amount);
-    showNotification(res.message);
-  };
-
-  const handleRecordTransaction = (e: React.FormEvent) => {
-    e.preventDefault();
-    const amount = parseInt(simAmount, 10);
-    if (isNaN(amount) || amount <= 0) {
-      alert('Please enter a valid transaction amount.');
-      return;
-    }
-    const split = billingManager.recordEligibleRevenueTransaction(
-      amount,
-      simDesc,
-      simClient,
-      simCategory
-    );
-    showNotification(
-      `Recorded ₦${amount.toLocaleString()} transaction! Platform received ₦${split.companyShareNgn.toLocaleString()} (40%) and your earnings received ₦${split.userShareNgn.toLocaleString()} (60%).`
-    );
+  const handleSavePreferences = () => {
+    localStorage.setItem('nc_gemini_api_key', geminiApiKey.trim());
+    setSavedNotice(true);
+    setTimeout(() => setSavedNotice(false), 2500);
   };
 
   const usageStatus = billingManager.getUsageStatus();
@@ -287,33 +241,6 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
           >
             <CreditCard size={15} />
             <span>Subscription &amp; AI Credits</span>
-          </button>
-
-          <button
-            onClick={() => setActiveTab('earnings')}
-            style={{
-              padding: '10px 18px',
-              fontSize: '13px',
-              fontWeight: 700,
-              border: 'none',
-              borderBottom:
-                activeTab === 'earnings'
-                  ? '3px solid var(--accent-blue)'
-                  : '3px solid transparent',
-              backgroundColor: 'transparent',
-              color:
-                activeTab === 'earnings'
-                  ? 'var(--ink-navy)'
-                  : 'var(--ink-muted)',
-              cursor: 'pointer',
-              display: 'flex',
-              alignItems: 'center',
-              gap: '8px',
-              whiteSpace: 'nowrap',
-            }}
-          >
-            <TrendingUp size={15} />
-            <span>Revenue Sharing &amp; Earnings (60%)</span>
           </button>
 
           <button
@@ -972,446 +899,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
         )}
 
         {/* =================================================================
-            TAB 2: CONFIGURABLE REVENUE SHARING & EARNINGS (Section 13)
-        ================================================================== */}
-        {activeTab === 'earnings' && (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '28px' }}>
-            {/* Policy & Isolation Disclosure */}
-            <div
-              style={{
-                backgroundColor: '#EFF6FF',
-                border: '1px solid #BFDBFE',
-                padding: '20px',
-                display: 'flex',
-                gap: '14px',
-                alignItems: 'flex-start',
-              }}
-            >
-              <ShieldCheck size={24} color="#1D4ED8" style={{ flexShrink: 0, marginTop: '2px' }} />
-              <div style={{ fontSize: '13px', lineHeight: 1.5, color: '#1E3A8A' }}>
-                <strong style={{ fontSize: '14px', display: 'block', marginBottom: '4px' }}>
-                  Strict Ledger Isolation: 40% Platform / 60% User Revenue Split
-                </strong>
-                Monetary earnings collected from client document typing, formatting, and editorial services
-                are strictly isolated from AI credit pools. The platform retains a 40% company commission to
-                sustain server infrastructure, Google Cloud proxy architecture, and gateway clearance. The
-                remaining 60% net share is immediately credited to your verified Nigerian Naira earnings balance
-                and is available for direct bank withdrawal.
-              </div>
-            </div>
-
-            {/* Earnings KPI Cards */}
-            <div
-              style={{
-                display: 'grid',
-                gridTemplateColumns: 'repeat(auto-fit, minmax(190px, 1fr))',
-                gap: '14px',
-              }}
-            >
-              <div
-                style={{
-                  border: '1px solid var(--border-ivory)',
-                  padding: '18px',
-                  backgroundColor: 'var(--bg-ivory)',
-                }}
-              >
-                <span className="mono-label" style={{ fontSize: '9.5px', color: 'var(--ink-muted)' }}>
-                  GROSS REVENUE COLLECTED
-                </span>
-                <div
-                  style={{
-                    fontSize: '24px',
-                    fontWeight: 800,
-                    color: 'var(--ink-navy)',
-                    marginTop: '6px',
-                  }}
-                >
-                  ₦{earningsAccount.grossEarningsNgn.toLocaleString()}
-                </div>
-                <span style={{ fontSize: '11px', color: 'var(--ink-muted)' }}>
-                  100% total client billings
-                </span>
-              </div>
-
-              <div
-                style={{
-                  border: '1px solid var(--border-ivory)',
-                  padding: '18px',
-                  backgroundColor: 'var(--bg-ivory)',
-                }}
-              >
-                <span className="mono-label" style={{ fontSize: '9.5px', color: 'var(--ink-muted)' }}>
-                  COMPANY COMMISSION (40%)
-                </span>
-                <div
-                  style={{
-                    fontSize: '24px',
-                    fontWeight: 800,
-                    color: 'var(--accent-terracotta)',
-                    marginTop: '6px',
-                  }}
-                >
-                  ₦{earningsAccount.companyCommissionNgn.toLocaleString()}
-                </div>
-                <span style={{ fontSize: '11px', color: 'var(--ink-muted)' }}>
-                  Platform maintenance &amp; proxy
-                </span>
-              </div>
-
-              <div
-                style={{
-                  border: '1px solid var(--border-ivory)',
-                  padding: '18px',
-                  backgroundColor: 'var(--bg-ivory)',
-                }}
-              >
-                <span className="mono-label" style={{ fontSize: '9.5px', color: 'var(--ink-muted)' }}>
-                  YOUR NET EARNINGS (60%)
-                </span>
-                <div
-                  style={{
-                    fontSize: '24px',
-                    fontWeight: 800,
-                    color: '#16A34A',
-                    marginTop: '6px',
-                  }}
-                >
-                  ₦{earningsAccount.netUserEarningsNgn.toLocaleString()}
-                </div>
-                <span style={{ fontSize: '11px', color: 'var(--ink-muted)' }}>
-                  Direct operator share
-                </span>
-              </div>
-
-              <div
-                style={{
-                  border: '2px solid #16A34A',
-                  padding: '18px',
-                  backgroundColor: 'var(--bg-stone)',
-                }}
-              >
-                <span className="mono-label" style={{ fontSize: '9.5px', color: '#16A34A' }}>
-                  AVAILABLE FOR WITHDRAWAL
-                </span>
-                <div
-                  style={{
-                    fontSize: '26px',
-                    fontWeight: 800,
-                    color: 'var(--ink-navy)',
-                    marginTop: '6px',
-                  }}
-                >
-                  ₦{earningsAccount.availableBalanceNgn.toLocaleString()}
-                </div>
-                <span style={{ fontSize: '11px', color: 'var(--ink-muted)' }}>
-                  + ₦{earningsAccount.pendingBalanceNgn.toLocaleString()} pending clearance
-                </span>
-              </div>
-            </div>
-
-            {/* Withdrawal & Client Transaction Forms Grid */}
-            <div className="nc-settings-grid">
-              {/* Form 1: Request Withdrawal */}
-              <div
-                style={{
-                  border: '1px solid var(--border-ivory)',
-                  padding: '22px',
-                  backgroundColor: 'var(--bg-ivory)',
-                }}
-              >
-                <div
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '8px',
-                    marginBottom: '16px',
-                  }}
-                >
-                  <Building2 size={18} color="var(--accent-blue)" />
-                  <h3 style={{ fontSize: '16px', fontWeight: 700 }}>
-                    Request Bank Withdrawal
-                  </h3>
-                </div>
-
-                <form onSubmit={handleWithdrawalSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-                  <div>
-                    <label className="ed-field-label">Withdrawal Amount (₦)</label>
-                    <input
-                      type="number"
-                      min={1000}
-                      max={earningsAccount.availableBalanceNgn}
-                      value={withdrawAmount}
-                      onChange={(e) => setWithdrawAmount(e.target.value)}
-                      className="ed-input"
-                    />
-                    <span style={{ fontSize: '11px', color: 'var(--ink-muted)' }}>
-                      Available balance: ₦{earningsAccount.availableBalanceNgn.toLocaleString()}
-                    </span>
-                  </div>
-
-                  <div>
-                    <label className="ed-field-label">Bank Name</label>
-                    <select
-                      value={bankName}
-                      onChange={(e) => setBankName(e.target.value)}
-                      className="ed-select"
-                    >
-                      <option>GTBank</option>
-                      <option>Access Bank</option>
-                      <option>Zenith Bank</option>
-                      <option>First Bank of Nigeria</option>
-                      <option>United Bank for Africa (UBA)</option>
-                      <option>Kuda Microfinance Bank</option>
-                      <option>OPay / PalmPay</option>
-                    </select>
-                  </div>
-
-                  <div className="nc-grid-2col">
-                    <div>
-                      <label className="ed-field-label">Account Number</label>
-                      <input
-                        type="text"
-                        maxLength={10}
-                        value={accountNumber}
-                        onChange={(e) => setAccountNumber(e.target.value)}
-                        className="ed-input"
-                      />
-                    </div>
-                    <div>
-                      <label className="ed-field-label">Account Name</label>
-                      <input
-                        type="text"
-                        value={accountName}
-                        onChange={(e) => setAccountName(e.target.value)}
-                        className="ed-input"
-                      />
-                    </div>
-                  </div>
-
-                  <button
-                    type="submit"
-                    disabled={earningsAccount.availableBalanceNgn <= 0}
-                    className="btn-ed-primary"
-                    style={{ marginTop: '8px', justifyContent: 'center' }}
-                  >
-                    <Send size={13} />
-                    <span>Submit Withdrawal Request</span>
-                  </button>
-                </form>
-              </div>
-
-              {/* Form 2: Simulate / Record Client Service Transaction */}
-              <div
-                style={{
-                  border: '1px solid var(--border-ivory)',
-                  padding: '22px',
-                  backgroundColor: 'var(--bg-stone)',
-                }}
-              >
-                <div
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '8px',
-                    marginBottom: '16px',
-                  }}
-                >
-                  <Zap size={18} color="var(--accent-blue)" />
-                  <h3 style={{ fontSize: '16px', fontWeight: 700 }}>
-                    Record Client Service Revenue
-                  </h3>
-                </div>
-
-                <form onSubmit={handleRecordTransaction} style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-                  <div>
-                    <label className="ed-field-label">Client / Student Name</label>
-                    <input
-                      type="text"
-                      value={simClient}
-                      onChange={(e) => setSimClient(e.target.value)}
-                      className="ed-input"
-                    />
-                  </div>
-
-                  <div>
-                    <label className="ed-field-label">Service Description</label>
-                    <input
-                      type="text"
-                      value={simDesc}
-                      onChange={(e) => setSimDesc(e.target.value)}
-                      className="ed-input"
-                    />
-                  </div>
-
-                  <div className="nc-grid-2col">
-                    <div>
-                      <label className="ed-field-label">Gross Amount (₦)</label>
-                      <input
-                        type="number"
-                        min={500}
-                        value={simAmount}
-                        onChange={(e) => setSimAmount(e.target.value)}
-                        className="ed-input"
-                      />
-                    </div>
-                    <div>
-                      <label className="ed-field-label">Category</label>
-                      <select
-                        value={simCategory}
-                        onChange={(e) => setSimCategory(e.target.value as any)}
-                        className="ed-select"
-                      >
-                        <option value="freelance_formatting">Freelance Formatting Service</option>
-                        <option value="peer_review">Academic Peer Review</option>
-                        <option value="template_sale">Custom Template Sale</option>
-                        <option value="consultation">Editorial Consultation</option>
-                      </select>
-                    </div>
-                  </div>
-
-                  <div
-                    style={{
-                      padding: '10px 12px',
-                      backgroundColor: 'var(--bg-ivory)',
-                      border: '1px solid var(--border-ivory)',
-                      fontSize: '11.5px',
-                      color: 'var(--ink-navy)',
-                    }}
-                  >
-                    Automatic Split Preview: Company 40% (₦
-                    {((parseInt(simAmount, 10) || 0) * 0.4).toLocaleString()}) | Your Share 60% (₦
-                    {((parseInt(simAmount, 10) || 0) * 0.6).toLocaleString()})
-                  </div>
-
-                  <button
-                    type="submit"
-                    className="btn-ed-primary"
-                    style={{ marginTop: '4px', justifyContent: 'center' }}
-                  >
-                    <PlusCircle size={13} />
-                    <span>Record &amp; Split Revenue</span>
-                  </button>
-                </form>
-              </div>
-            </div>
-
-            {/* Revenue Transactions Ledger */}
-            <div>
-              <div style={{ marginBottom: '14px' }}>
-                <h3 style={{ fontSize: '16px', fontWeight: 700 }}>
-                  Revenue Sharing Transaction History
-                </h3>
-                <p style={{ fontSize: '12px', color: 'var(--ink-muted)' }}>
-                  Real-time ledger recording each client transaction and its 40% company / 60% operator allocation.
-                </p>
-              </div>
-
-              <div
-                style={{
-                  border: '1px solid var(--border-ivory)',
-                  overflowX: 'auto',
-                  backgroundColor: 'var(--bg-ivory)',
-                }}
-              >
-                <table
-                  style={{
-                    width: '100%',
-                    borderCollapse: 'collapse',
-                    fontSize: '12px',
-                    textAlign: 'left',
-                  }}
-                >
-                  <thead>
-                    <tr
-                      style={{
-                        backgroundColor: 'var(--bg-stone)',
-                        borderBottom: '1px solid var(--border-ivory)',
-                        color: 'var(--ink-muted)',
-                        fontFamily: 'var(--font-mono)',
-                        fontSize: '10px',
-                        textTransform: 'uppercase',
-                        letterSpacing: '0.07em',
-                      }}
-                    >
-                      <th style={{ padding: '10px 14px' }}>Date</th>
-                      <th style={{ padding: '10px 14px' }}>Reference</th>
-                      <th style={{ padding: '10px 14px' }}>Client</th>
-                      <th style={{ padding: '10px 14px' }}>Description</th>
-                      <th style={{ padding: '10px 14px' }}>Gross (₦)</th>
-                      <th style={{ padding: '10px 14px' }}>Platform 40% (₦)</th>
-                      <th style={{ padding: '10px 14px' }}>Your 60% (₦)</th>
-                      <th style={{ padding: '10px 14px' }}>Status</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {earningsAccount.transactions.map((tx) => (
-                      <tr
-                        key={tx.id}
-                        style={{ borderBottom: '1px solid var(--border-ivory)' }}
-                      >
-                        <td style={{ padding: '10px 14px', whiteSpace: 'nowrap' }}>
-                          {tx.timestamp}
-                        </td>
-                        <td
-                          style={{
-                            padding: '10px 14px',
-                            fontFamily: 'var(--font-mono)',
-                            fontSize: '11px',
-                          }}
-                        >
-                          {tx.reference}
-                        </td>
-                        <td style={{ padding: '10px 14px', fontWeight: 600 }}>
-                          {tx.clientOrPayer}
-                        </td>
-                        <td style={{ padding: '10px 14px' }}>{tx.description}</td>
-                        <td style={{ padding: '10px 14px', fontWeight: 600 }}>
-                          ₦{tx.grossAmountNgn.toLocaleString()}
-                        </td>
-                        <td
-                          style={{
-                            padding: '10px 14px',
-                            color: 'var(--accent-terracotta)',
-                          }}
-                        >
-                          -₦{tx.companyShareNgn.toLocaleString()}
-                        </td>
-                        <td
-                          style={{
-                            padding: '10px 14px',
-                            fontWeight: 700,
-                            color: '#16A34A',
-                          }}
-                        >
-                          +₦{tx.userShareNgn.toLocaleString()}
-                        </td>
-                        <td style={{ padding: '10px 14px' }}>
-                          <span
-                            style={{
-                              backgroundColor:
-                                tx.status === 'verified' ? '#DCFCE7' : '#FEF3C7',
-                              color:
-                                tx.status === 'verified' ? '#15803D' : '#B45309',
-                              fontSize: '10px',
-                              padding: '2px 6px',
-                              borderRadius: '2px',
-                              fontWeight: 600,
-                            }}
-                          >
-                            {tx.status}
-                          </span>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* =================================================================
-            TAB 3: ACCOUNT & DOCUMENT DEFAULTS
+            TAB 2: ACCOUNT & DOCUMENT DEFAULTS
         ================================================================== */}
         {activeTab === 'account' && (
           <div className="nc-settings-grid">
@@ -1486,6 +974,21 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                   </div>
                 </div>
 
+                {/* Google Gemini API Key Configuration (Section 2) */}
+                <div>
+                  <label className="ed-field-label">Google Gemini API Key (Optional Override)</label>
+                  <input
+                    type="password"
+                    value={geminiApiKey}
+                    onChange={(e) => setGeminiApiKey(e.target.value)}
+                    placeholder="AIzaSy... (leave blank to use default proxy)"
+                    className="ed-input"
+                  />
+                  <span style={{ fontSize: '11px', color: 'var(--ink-muted)' }}>
+                    Requests connect securely to Google Cloud Project 175673940381. You can optionally supply your personal Gemini API key here.
+                  </span>
+                </div>
+
                 {/* Workspace Theme Toggle (Section 8) */}
                 {onToggleDarkMode && (
                   <div
@@ -1529,10 +1032,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                   }}
                 >
                   <button
-                    onClick={() => {
-                      setSavedNotice(true);
-                      setTimeout(() => setSavedNotice(false), 2500);
-                    }}
+                    onClick={handleSavePreferences}
                     className="btn-ed-primary"
                   >
                     Save Preferences

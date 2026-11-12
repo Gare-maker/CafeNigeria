@@ -72,6 +72,8 @@ import {
   runPageLevelAI,
   runTextLevelAI,
   runWorkspaceAIPrompt,
+  runWorkspaceAIPromptAsync,
+  WorkspaceAIResult,
   extractSourceReferences,
   parseGroupingInstruction,
 } from '../services/aiGenerator';
@@ -226,9 +228,6 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
     originalPrompt?: string;
   } | null>(null);
 
-  // Section 5: AI Workspace Document Selection State
-  const [showWorkspaceDocSelector, setShowWorkspaceDocSelector] = useState(false);
-
   // Subscribe to BillingManager live events
   useEffect(() => {
     const unsub = billingManager.subscribe(() => {
@@ -326,21 +325,16 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
     { name: string; extractedText: string }[]
   >([]);
   const [isAiLoading, setIsAiLoading] = useState(false);
+  const [aiProgressMessage, setAiProgressMessage] = useState('');
 
-  // Requirement 8: Voice-to-Text in Main AI Assistant
+  // Requirement 8: Real-time Voice-to-Text in Main AI Assistant (Instant live dictation)
   const {
     isRecording: isMainAiRecording,
-    interimText: mainAiInterim,
     toggleRecording: toggleMainAiVoice,
     stopRecording: stopMainAiVoice,
-  } = useVoiceToText(
-    setPromptInput,
-    'Update the selected section with a comparative analysis table and incorporate the key findings from the attached reference document.'
-  );
+  } = useVoiceToText(setPromptInput);
 
-  const combinedMainAiInput = mainAiInterim
-    ? `${promptInput}${promptInput ? ' ' : ''}${mainAiInterim}`
-    : promptInput;
+  const combinedMainAiInput = promptInput;
 
   // Requirement 9: Auto-expand Main AI Assistant input box vertically
   useEffect(() => {
@@ -1057,24 +1051,17 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
     }
   };
 
-  // Open Text AI popup and keep the text visibly highlighted without shifting/jumping
+  // Open Text AI popup and keep the text visibly highlighted without shifting or jumping
   const handleOpenTextAiPopup = () => {
-    if (savedRangeRef.current && highlightedText) {
-      try {
-        const mark = window.document.createElement('mark');
-        mark.className = 'ai-persistent-selection';
-        savedRangeRef.current.surroundContents(mark);
-      } catch {
-        // Multi-node or partially-selected block range: avoid extractContents() which mutates DOM layout
-        // Re-applying the selection directly preserves the user's highlighted text with zero layout disruption
-        const sel = window.getSelection();
-        if (sel && savedRangeRef.current) {
-          try {
-            sel.removeAllRanges();
-            sel.addRange(savedRangeRef.current);
-          } catch {
-            // selection range preserved in savedRangeRef
-          }
+    // Preserve the exact browser selection range without modifying DOM nodes so text NEVER jumps or shifts
+    if (savedRangeRef.current) {
+      const sel = window.getSelection();
+      if (sel) {
+        try {
+          sel.removeAllRanges();
+          sel.addRange(savedRangeRef.current.cloneRange());
+        } catch {
+          // range preserved
         }
       }
     }
@@ -1083,16 +1070,6 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
 
   const handleCloseTextAiPopup = () => {
     setShowTextAiPopup(false);
-    pageRefs.current.forEach((pageEl) => {
-      if (pageEl) {
-        const marks = pageEl.querySelectorAll('mark.ai-persistent-selection');
-        marks.forEach((m) => {
-          const parent = m.parentNode;
-          while (m.firstChild) parent?.insertBefore(m.firstChild, m);
-          m.remove();
-        });
-      }
-    });
     setHighlightedText('');
     setHighlightBadgePos(null);
   };
@@ -1104,19 +1081,26 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
     const pageEl = pageRefs.current[highlightPageIdx];
 
     if (pageEl) {
-      const mark = pageEl.querySelector('mark.ai-persistent-selection');
-      if (mark) {
-        const temp = window.document.createElement('span');
-        temp.innerHTML = result.updatedHtml;
-        mark.replaceWith(...Array.from(temp.childNodes));
-      } else if (savedRangeRef.current) {
-        pageEl.focus();
-        const sel = window.getSelection();
-        sel?.removeAllRanges();
-        sel?.addRange(savedRangeRef.current);
-        window.document.execCommand('insertHTML', false, result.updatedHtml);
+      if (savedRangeRef.current) {
+        try {
+          const range = savedRangeRef.current;
+          range.deleteContents();
+          const frag = range.createContextualFragment(result.updatedHtml);
+          range.insertNode(frag);
+        } catch {
+          pageEl.focus();
+          const sel = window.getSelection();
+          sel?.removeAllRanges();
+          sel?.addRange(savedRangeRef.current);
+          window.document.execCommand('insertHTML', false, result.updatedHtml);
+        }
       }
       checkAndFlowPages(highlightPageIdx);
+      const nextPages = pages.map((_, i) => pageRefs.current[i]?.innerHTML || pages[i]);
+      setPages(nextPages);
+      triggerAutoSave({
+        overrideHtml: getCombinedCleanHtml(nextPages),
+      });
     }
 
     setShowTextAiPopup(false);
@@ -1736,17 +1720,19 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
   // =========================================================================
   // REQUIREMENT 8: ADD BLANK PAGE & PAGE BREAK
   // =========================================================================
+  // REQUIREMENT 5 & 8: ADD BLANK PAGE (ALWAYS AT THE BOTTOM OF THE DOCUMENT)
+  // =========================================================================
   const handleAddBlankPage = () => {
-    const idx = activePageIdxRef.current;
     const currentHtmls = pages.map((_, i) =>
       pageRefs.current[i] ? pageRefs.current[i]!.innerHTML : pages[i]
     );
-    const nextPages = [...currentHtmls];
-    nextPages.splice(idx + 1, 0, '<p><br/></p>');
+    // Requirement 5: ALWAYS append the new page at the BOTTOM of the document
+    const nextPages = [...currentHtmls, '<p><br/></p>'];
+    const newIdx = nextPages.length - 1;
     setPages(nextPages);
-    activePageIdxRef.current = idx + 1;
+    activePageIdxRef.current = newIdx;
     setTimeout(() => {
-      const newPageEl = pageRefs.current[idx + 1];
+      const newPageEl = pageRefs.current[newIdx];
       if (newPageEl) {
         newPageEl.focus();
         newPageEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
@@ -2244,8 +2230,14 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
 
     setPromptInput('');
     setIsAiLoading(true);
+    setAiProgressMessage('Reading active document...');
 
-    setTimeout(() => {
+    setTimeout(async () => {
+      setAiProgressMessage('Analyzing document structure...');
+      await new Promise((r) => setTimeout(r, 220));
+
+      setAiProgressMessage('Generating edits with AI...');
+
       // Calculate token usage and deduct credits (Section 12)
       const inputTokenEst = Math.ceil(effectiveQuery.length / 4) +
         aiUploadedRefs.reduce((acc, r) => acc + Math.ceil(r.extractedText.length / 4), 0);
@@ -2258,7 +2250,8 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
         doc.title
       );
 
-      const result = runWorkspaceAIPrompt(
+      // Requirement 1 & 2: Call Gemini / Workspace AI with Strict Active Document Context Isolation
+      const result: WorkspaceAIResult = await runWorkspaceAIPromptAsync(
         effectiveQuery,
         {
           ...doc,
@@ -2270,6 +2263,8 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
         explicitPageIndices,
         aiUploadedRefs
       );
+
+      setAiProgressMessage('Applying changes to document...');
 
       // Directly implement the requested changes on the target pages in the workspace!
       const nextPages = [...currentPagesHtml];
@@ -2283,21 +2278,39 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
             }
           }
         });
-        setPages(nextPages);
       }
 
-      // Extract source references (Section 5)
+      // Requirement 4 & 5: If a new page was requested, append at the BOTTOM of the document
+      if (result.action === 'append_page' || result.newPageHtml) {
+        const newPageHtml = result.newPageHtml || '<p><br/></p>';
+        nextPages.push(newPageHtml);
+        const newIdx = nextPages.length - 1;
+        activePageIdxRef.current = newIdx;
+        setTimeout(() => {
+          const newPageEl = pageRefs.current[newIdx];
+          if (newPageEl) {
+            newPageEl.focus();
+            newPageEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          }
+        }, 80);
+      }
+
+      // Apply any layout or border updates
+      if (result.layoutUpdates) {
+        setLayout((prev) => ({
+          ...prev,
+          ...result.layoutUpdates,
+        }));
+      }
+
+      setPages(nextPages);
+
+      // Requirement 1: Extract sources STRICTLY from user attachments for this active doc only
       const allCandidateSources = [
         ...aiUploadedRefs.map((r) => ({
           name: r.name,
           extractedText: r.extractedText,
           type: 'upload',
-        })),
-        ...allDocuments.map((d) => ({
-          name: d.title,
-          extractedText: d.content.replace(/<[^>]+>/g, ' ').slice(0, 160),
-          docId: d.id,
-          type: 'workspace_doc',
         })),
       ];
 
@@ -2321,13 +2334,18 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
       };
 
       const nextHistory = [...doc.aiHistory, userMsg, assistantMsg];
-      setIsAiLoading(false);
-      setAiUploadedRefs([]);
-      triggerAutoSave({
-        overrideHtml: getCombinedCleanHtml(nextPages),
-        overrideAiHistory: nextHistory,
-      });
-    }, 320);
+      setAiProgressMessage('Document updated successfully.');
+
+      setTimeout(() => {
+        setIsAiLoading(false);
+        setAiProgressMessage('');
+        setAiUploadedRefs([]);
+        triggerAutoSave({
+          overrideHtml: getCombinedCleanHtml(nextPages),
+          overrideAiHistory: nextHistory,
+        });
+      }, 350);
+    }, 200);
   };
 
   // Section 9: Apply AI Grouping Proposal with User Confirmation
@@ -2402,19 +2420,6 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
     });
     setHasUnsavedChanges(true);
     setShowCoverManagerModal(false);
-  };
-
-  // Section 5: Add Reference from Workspace Document to AI Context
-  const handleAddWorkspaceDocReference = (refDoc: DocumentItem) => {
-    const textSnippet = refDoc.content.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 800);
-    setAiUploadedRefs((prev) => [
-      ...prev,
-      {
-        name: `[Doc] ${refDoc.title}`,
-        extractedText: textSnippet,
-      },
-    ]);
-    setShowWorkspaceDocSelector(false);
   };
 
   const selectedDrawingObj =
@@ -4846,7 +4851,11 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
             return (
               <div
                 key={pageIdx}
-                className="doc-a4-page"
+                className={`doc-a4-page ${
+                  isAiLoading && activePageIdxRef.current === pageIdx
+                    ? 'nc-ai-shimmer'
+                    : ''
+                }`}
                 data-page-index={pageIdx}
                 onClick={(e) => {
                   const target = e.target as HTMLElement;
@@ -5409,12 +5418,29 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
                   alignItems: 'center',
                   gap: '7px',
                   fontWeight: 700,
-                  fontSize: '13.5px',
+                  fontSize: '13px',
                   color: 'var(--ink-navy)',
                 }}
               >
                 <Sparkles size={14} color="var(--accent-blue)" />
                 <span>AI Assistant</span>
+                <span
+                  title="Strict context isolation: AI exclusively reads and edits this active document."
+                  style={{
+                    fontSize: '9.5px',
+                    padding: '2px 7px',
+                    backgroundColor: 'rgba(20, 71, 230, 0.08)',
+                    color: 'var(--accent-blue)',
+                    border: '1px solid rgba(20, 71, 230, 0.2)',
+                    fontWeight: 600,
+                    maxWidth: '190px',
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    whiteSpace: 'nowrap',
+                  }}
+                >
+                  Active: {title}
+                </span>
               </div>
 
               <button
@@ -5865,14 +5891,21 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
 
               {isAiLoading && (
                 <div
+                  className="nc-ai-shimmer"
                   style={{
-                    padding: '10px',
-                    border: '1px solid var(--border-ivory)',
+                    padding: '12px 14px',
+                    border: '1.5px solid var(--accent-blue)',
+                    backgroundColor: 'var(--bg-stone)',
+                    color: 'var(--ink-navy)',
                     fontSize: '12px',
-                    color: 'var(--accent-blue)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '10px',
+                    fontWeight: 600,
                   }}
                 >
-                  Applying changes directly to workspace...
+                  <Sparkles size={15} color="var(--accent-blue)" />
+                  <span>{aiProgressMessage || 'Applying changes directly to active document...'}</span>
                 </div>
               )}
             </div>
@@ -6049,26 +6082,6 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
                         style={{ display: 'none' }}
                       />
                     </label>
-
-                    {/* Section 5: Add Reference from Workspace Document */}
-                    <button
-                      type="button"
-                      onClick={() => setShowWorkspaceDocSelector(true)}
-                      title="Reference another workspace document"
-                      style={{
-                        width: '28px',
-                        height: '28px',
-                        border: '1px solid var(--border-stone)',
-                        backgroundColor: 'var(--bg-stone)',
-                        color: 'var(--ink-navy)',
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        cursor: 'pointer',
-                      }}
-                    >
-                      <BookOpen size={12} />
-                    </button>
 
                     <button
                       type="button"
@@ -6782,100 +6795,6 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
               >
                 Apply Cover Page to Page {coverTargetPageIndex + 1}
               </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* =====================================================================
-          SECTION 5: WORKSPACE DOCUMENT REFERENCE SELECTOR MODAL
-      ===================================================================== */}
-      {showWorkspaceDocSelector && (
-        <div className="nc-modal-backdrop no-print" style={{ zIndex: 9999 }}>
-          <div
-            className="nc-modal-dialog"
-            style={{ maxWidth: '520px', padding: 0 }}
-          >
-            <div
-              style={{
-                padding: '16px 20px',
-                borderBottom: '1px solid var(--border-ivory)',
-                backgroundColor: 'var(--bg-ivory)',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'space-between',
-              }}
-            >
-              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                <BookOpen size={17} color="var(--accent-blue)" />
-                <h3
-                  style={{
-                    margin: 0,
-                    fontSize: '15px',
-                    fontWeight: 700,
-                    color: 'var(--ink-navy)',
-                  }}
-                >
-                  Reference Workspace Document
-                </h3>
-              </div>
-              <button
-                type="button"
-                onClick={() => setShowWorkspaceDocSelector(false)}
-                className="btn-ed-subtle"
-                style={{ padding: '4px' }}
-              >
-                <X size={14} />
-              </button>
-            </div>
-
-            <div style={{ padding: '16px', maxHeight: '360px', overflowY: 'auto' }}>
-              <p
-                style={{
-                  fontSize: '12px',
-                  color: 'var(--ink-muted)',
-                  margin: '0 0 12px 0',
-                }}
-              >
-                Choose an existing document to provide background context and citations to the AI:
-              </p>
-
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                {allDocuments
-                  .filter((d) => d.id !== doc.id)
-                  .map((item) => (
-                    <div
-                      key={item.id}
-                      onClick={() => handleAddWorkspaceDocReference(item)}
-                      style={{
-                        padding: '10px 12px',
-                        border: '1px solid var(--border-stone)',
-                        backgroundColor: 'var(--bg-ivory)',
-                        cursor: 'pointer',
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'space-between',
-                      }}
-                    >
-                      <div>
-                        <div style={{ fontWeight: 600, fontSize: '13px', color: 'var(--ink-navy)' }}>
-                          {item.title}
-                        </div>
-                        <div style={{ fontSize: '11px', color: 'var(--ink-muted)' }}>
-                          Category: {item.category} • Updated: {item.updatedAt}
-                        </div>
-                      </div>
-                      <span className="btn-ed-subtle" style={{ fontSize: '10px', padding: '3px 8px' }}>
-                        + Add Ref
-                      </span>
-                    </div>
-                  ))}
-                {allDocuments.filter((d) => d.id !== doc.id).length === 0 && (
-                  <div style={{ fontSize: '12px', color: 'var(--ink-muted)', padding: '12px' }}>
-                    No other documents found in this workspace. Create or import additional documents to reference them.
-                  </div>
-                )}
-              </div>
             </div>
           </div>
         </div>
