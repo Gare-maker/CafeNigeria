@@ -55,6 +55,7 @@ export interface AIMessage {
   id: string;
   role: 'user' | 'assistant';
   prompt: string;
+  chatResponse?: string;
   generatedHtml?: string;
   summary?: string;
   timestamp: string;

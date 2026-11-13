@@ -5,3 +5,4 @@ declare module 'mammoth' {
   };
   export default mammoth;
 }
+

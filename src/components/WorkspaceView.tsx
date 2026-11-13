@@ -169,8 +169,18 @@ function splitHtmlIntoInitialPages(html: string, docPages?: string[]): string[] 
   if (docPages && docPages.length > 0) {
     return docPages;
   }
-  const explicitParts = html
-    .split(/<hr[^>]*class=["']?page-break["']?[^>]*>/i)
+  if (!html || !html.trim()) {
+    return ['<p><br/></p>'];
+  }
+
+  // Normalize delimiters to standard page break token
+  const normalized = html
+    .replace(/<!--\s*PAGE_BREAK\s*-->/gi, '<hr class="page-break" />')
+    .replace(/<div[^>]*class=["']?page-break["']?[^>]*>[\s\S]*?<\/div>/gi, '<hr class="page-break" />')
+    .replace(/<hr[^>]*class=["']?page-break["']?[^>]*>/gi, '<hr class="page-break" />');
+
+  const explicitParts = normalized
+    .split('<hr class="page-break" />')
     .map((p) => p.trim())
     .filter((p) => p.length > 0);
 
@@ -2174,6 +2184,38 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
     e.target.value = '';
   };
 
+  const handleInsertAiContentToCurrentPage = (contentHtml: string) => {
+    const curIdx = activePageIdxRef.current;
+    const currentHtml = pageRefs.current[curIdx]?.innerHTML || pages[curIdx] || '';
+    const newHtml = currentHtml + '\n' + contentHtml;
+    const nextPages = [...pages];
+    nextPages[curIdx] = newHtml;
+    if (pageRefs.current[curIdx]) {
+      pageRefs.current[curIdx]!.innerHTML = newHtml;
+    }
+    setPages(nextPages);
+    triggerAutoSave({
+      overrideHtml: getCombinedCleanHtml(nextPages),
+    });
+  };
+
+  const handleAppendAiContentAsNewPage = (contentHtml: string) => {
+    const nextPages = [...pages, contentHtml];
+    const newIdx = nextPages.length - 1;
+    setPages(nextPages);
+    triggerAutoSave({
+      overrideHtml: getCombinedCleanHtml(nextPages),
+    });
+    activePageIdxRef.current = newIdx;
+    setTimeout(() => {
+      const el = pageRefs.current[newIdx];
+      if (el) {
+        el.focus();
+        el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }
+    }, 100);
+  };
+
   const handleSendAiPrompt = () => {
     if (isMainAiRecording) stopMainAiVoice();
     const query = combinedMainAiInput.trim();
@@ -2264,7 +2306,7 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
       const conversationHistory = (doc.aiHistory || [])
         .map((m) => ({
           role: (m.role === 'assistant' ? 'model' : 'user') as 'user' | 'model',
-          text: m.role === 'assistant' ? (m.summary || m.prompt || 'Document updated') : (m.prompt || ''),
+          text: m.role === 'assistant' ? (m.chatResponse || m.summary || m.prompt || 'Document updated') : (m.prompt || ''),
         }))
         .filter((m) => m.text.trim().length > 0);
 
@@ -2283,65 +2325,69 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
         conversationHistory
       );
 
-      setAiProgressMessage('Applying changes to document...');
-
-      // Directly implement the requested changes on the target pages in the workspace!
+      const shouldApplyDocUpdates = result.action !== 'conversation' && result.action !== 'ocr_extract';
       const nextPages = [...currentPagesHtml];
-      if (result.directPageUpdates) {
-        Object.entries(result.directPageUpdates).forEach(([idxStr, newHtml]) => {
-          const pIdx = parseInt(idxStr, 10);
-          if (pIdx >= 0 && pIdx < nextPages.length) {
-            nextPages[pIdx] = newHtml;
-            if (pageRefs.current[pIdx]) {
-              pageRefs.current[pIdx]!.innerHTML = newHtml;
+
+      if (shouldApplyDocUpdates) {
+        setAiProgressMessage('Applying changes to document...');
+
+        // Directly implement the requested changes on the target pages in the workspace!
+        if (result.directPageUpdates) {
+          Object.entries(result.directPageUpdates).forEach(([idxStr, newHtml]) => {
+            const pIdx = parseInt(idxStr, 10);
+            if (pIdx >= 0 && pIdx < nextPages.length) {
+              nextPages[pIdx] = newHtml;
+              if (pageRefs.current[pIdx]) {
+                pageRefs.current[pIdx]!.innerHTML = newHtml;
+              }
             }
-          }
-        });
-      }
+          });
+        }
 
-      // Requirement 4 & 5: If multi-page creation was requested, append ALL generated pages
-      if (result.action === 'multi_page_create' && result.newPageHtmls && result.newPageHtmls.length > 0) {
-        const firstNewIdx = nextPages.length;
-        result.newPageHtmls.forEach((html) => {
-          nextPages.push(html);
-        });
-        activePageIdxRef.current = firstNewIdx;
-        setTimeout(() => {
-          const firstNewEl = pageRefs.current[firstNewIdx];
-          if (firstNewEl) {
-            firstNewEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
-          }
-        }, 100);
-      } else if (result.action === 'append_page' || result.newPageHtml) {
-        const newPageHtml = result.newPageHtml || '<p><br/></p>';
-        nextPages.push(newPageHtml);
-        const newIdx = nextPages.length - 1;
-        activePageIdxRef.current = newIdx;
-        setTimeout(() => {
-          const newPageEl = pageRefs.current[newIdx];
-          if (newPageEl) {
-            newPageEl.focus();
-            newPageEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
-          }
-        }, 80);
-      }
+        // Requirement 4 & 5: If multi-page creation was requested, append ALL generated pages
+        if (result.action === 'multi_page_create' && result.newPageHtmls && result.newPageHtmls.length > 0) {
+          const firstNewIdx = nextPages.length;
+          result.newPageHtmls.forEach((html) => {
+            nextPages.push(html);
+          });
+          activePageIdxRef.current = firstNewIdx;
+          setTimeout(() => {
+            const firstNewEl = pageRefs.current[firstNewIdx];
+            if (firstNewEl) {
+              firstNewEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            }
+          }, 100);
+        } else if (result.action === 'append_page' || result.newPageHtml) {
+          const newPageHtml = result.newPageHtml || '<p><br/></p>';
+          nextPages.push(newPageHtml);
+          const newIdx = nextPages.length - 1;
+          activePageIdxRef.current = newIdx;
+          setTimeout(() => {
+            const newPageEl = pageRefs.current[newIdx];
+            if (newPageEl) {
+              newPageEl.focus();
+              newPageEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            }
+          }, 80);
+        }
 
-      // Apply decorative page frame style or layout updates
-      if (result.action === 'frame_update' && (result.frameStyle || (result.layoutUpdates as any)?.frameStyle)) {
-        const fStyle = result.frameStyle || (result.layoutUpdates as any)?.frameStyle;
-        setLayout((prev) => ({
-          ...prev,
-          frameStyle: fStyle,
-          borderStyle: fStyle === 'none' ? 'none' : 'solid',
-        }));
-      } else if (result.layoutUpdates) {
-        setLayout((prev) => ({
-          ...prev,
-          ...result.layoutUpdates,
-        }));
-      }
+        // Apply decorative page frame style or layout updates
+        if (result.action === 'frame_update' && (result.frameStyle || (result.layoutUpdates as any)?.frameStyle)) {
+          const fStyle = result.frameStyle || (result.layoutUpdates as any)?.frameStyle;
+          setLayout((prev) => ({
+            ...prev,
+            frameStyle: fStyle,
+            borderStyle: fStyle === 'none' ? 'none' : 'solid',
+          }));
+        } else if (result.layoutUpdates) {
+          setLayout((prev) => ({
+            ...prev,
+            ...result.layoutUpdates,
+          }));
+        }
 
-      setPages(nextPages);
+        setPages(nextPages);
+      }
 
       // Requirement 1: Extract sources STRICTLY from user attachments for this active doc only
       const allCandidateSources = [
@@ -2353,7 +2399,7 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
       ];
 
       const extractedSources = extractSourceReferences(
-        result.summary + ' ' + (result.generatedHtml || ''),
+        result.summary + ' ' + (result.generatedHtml || '') + ' ' + (result.chatResponse || ''),
         allCandidateSources
       );
 
@@ -2362,9 +2408,10 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
         role: 'assistant',
         prompt: effectiveQuery,
         summary: result.summary,
+        chatResponse: result.chatResponse,
         generatedHtml: result.generatedHtml,
         timestamp: timeStr,
-        inserted: true,
+        inserted: shouldApplyDocUpdates,
         targetGroupId: result.targetGroupId,
         targetGroupName: result.targetGroupName,
         targetPageIndex: result.targetPageIndices?.[0],
@@ -2372,14 +2419,14 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
       };
 
       const nextHistory = [...doc.aiHistory, userMsg, assistantMsg];
-      setAiProgressMessage('Document updated successfully.');
+      setAiProgressMessage(shouldApplyDocUpdates ? 'Document updated successfully.' : 'Response ready.');
 
       setTimeout(() => {
         setIsAiLoading(false);
         setAiProgressMessage('');
         setAiUploadedRefs([]);
         triggerAutoSave({
-          overrideHtml: getCombinedCleanHtml(nextPages),
+          overrideHtml: shouldApplyDocUpdates ? getCombinedCleanHtml(nextPages) : undefined,
           overrideAiHistory: nextHistory,
         });
       }, 350);
@@ -5804,15 +5851,73 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
                     </div>
                   ) : (
                     <div>
-                      <div
-                        style={{
-                          fontSize: '12px',
-                          color: 'var(--ink-body)',
-                          lineHeight: 1.45,
-                        }}
-                      >
-                        ✓ {msg.summary}
-                      </div>
+                      {msg.chatResponse ? (
+                        <div
+                          style={{
+                            fontSize: '12.5px',
+                            color: 'var(--ink-rich)',
+                            lineHeight: 1.55,
+                            whiteSpace: 'pre-wrap',
+                            wordBreak: 'break-word',
+                            marginBottom: '6px',
+                          }}
+                        >
+                          {msg.chatResponse}
+                        </div>
+                      ) : (
+                        <div
+                          style={{
+                            fontSize: '12px',
+                            color: 'var(--ink-body)',
+                            lineHeight: 1.45,
+                          }}
+                        >
+                          ✓ {msg.summary}
+                        </div>
+                      )}
+
+                      {/* Action buttons if content can be inserted or copied */}
+                      {msg.generatedHtml && (
+                        <div
+                          style={{
+                            marginTop: '8px',
+                            display: 'flex',
+                            gap: '6px',
+                            flexWrap: 'wrap',
+                          }}
+                        >
+                          <button
+                            type="button"
+                            onClick={() => handleInsertAiContentToCurrentPage(msg.generatedHtml!)}
+                            className="btn-ed-subtle"
+                            style={{ fontSize: '10px', padding: '3px 8px' }}
+                            title="Insert content into the active page"
+                          >
+                            + Insert into Page {(activePageAiIdx !== null ? activePageAiIdx : activePageIdxRef.current) + 1}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleAppendAiContentAsNewPage(msg.generatedHtml!)}
+                            className="btn-ed-subtle"
+                            style={{ fontSize: '10px', padding: '3px 8px' }}
+                            title="Append content as a new page"
+                          >
+                            + Append as New Page
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              navigator.clipboard.writeText(msg.chatResponse || msg.generatedHtml || '');
+                              alert('Copied to clipboard!');
+                            }}
+                            className="btn-ed-subtle"
+                            style={{ fontSize: '10px', padding: '3px 8px' }}
+                            title="Copy text"
+                          >
+                            Copy
+                          </button>
+                        </div>
+                      )}
 
                       {/* Section 5: Source Reference Badges & Citations */}
                       {msg.sources && msg.sources.length > 0 && (

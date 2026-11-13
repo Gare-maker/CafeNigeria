@@ -1,4 +1,5 @@
 import { AIAttachment } from '../types';
+import { extractTextFromImageAI, getGeminiApiKey } from './aiGenerator';
 
 /**
  * Formats byte size into human-readable format (KB, MB)
@@ -137,8 +138,28 @@ export async function processUploadedFile(file: File): Promise<AIAttachment> {
 
   if (isImage) {
     const dataUrl = await readImageAsDataUrl(file);
-    // Construct rich image extraction metadata for vision/OCR
-    const extractedText = `Image file "${file.name}" (${sizeFormatted}). Visual content includes printed/handwritten academic text, tabular structures, diagrammatic annotations, headings, and numerical data.`;
+    let extractedText = `Image file "${file.name}" (${sizeFormatted}). Visual content includes printed/handwritten text and tables.`;
+
+    // Attempt high-fidelity Gemini Vision OCR if API key is configured
+    try {
+      const apiKey = getGeminiApiKey();
+      if (apiKey) {
+        const ocr = await extractTextFromImageAI({
+          id,
+          name: file.name,
+          type: 'image',
+          fileType: ext.toUpperCase(),
+          sizeFormatted,
+          dataUrl,
+          extractedText: '',
+        });
+        if (ocr && ocr.text && ocr.text.trim().length > 15) {
+          extractedText = ocr.text.trim();
+        }
+      }
+    } catch (err) {
+      console.warn('Image vision extraction skipped:', err);
+    }
 
     return {
       id,

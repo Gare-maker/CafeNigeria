@@ -424,7 +424,7 @@ export const CreateDocumentModal: React.FC<CreateDocumentModalProps> = ({
           }
         }
 
-        // New Document with AI
+        // New Document with AI (Multi-section sequential generation with live progress reporting)
         const generated = await generateDocumentFromNaturalPromptAsync(
           category,
           effectivePrompt,
@@ -437,7 +437,8 @@ export const CreateDocumentModal: React.FC<CreateDocumentModalProps> = ({
             lecturer: lecturer.trim() || undefined,
             referencingStyle,
             wordCount: wordCount.trim() || undefined,
-          }
+          },
+          (status) => setExtractionStatus(status)
         );
 
         const newDoc: DocumentItem = {
@@ -455,6 +456,7 @@ export const CreateDocumentModal: React.FC<CreateDocumentModalProps> = ({
             layout: DEFAULT_PAGE_LAYOUT,
             orientation: 'portrait',
             marginSize: 'normal',
+            pages: generated.metadata?.pages,
           },
           aiHistory: [],
         };
