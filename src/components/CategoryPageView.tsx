@@ -686,7 +686,7 @@ export const CategoryPageView: React.FC<CategoryPageViewProps> = ({
         >
           <div
             style={{
-              backgroundColor: 'var(--bg-white)',
+              backgroundColor: 'var(--bg-ivory, #FBF9F5)',
               border: '2px solid var(--border-ivory)',
               maxWidth: '460px',
               width: '100%',
@@ -813,7 +813,7 @@ export const CategoryPageView: React.FC<CategoryPageViewProps> = ({
         >
           <div
             style={{
-              backgroundColor: 'var(--bg-white)',
+              backgroundColor: 'var(--bg-ivory, #FBF9F5)',
               border: '2px solid var(--border-ivory)',
               maxWidth: '500px',
               width: '100%',

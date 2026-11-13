@@ -11,12 +11,43 @@ export function formatFileSize(bytes: number): string {
 }
 
 /**
- * Reads an image file as a Data URL for thumbnail preview and Gemini vision payload
+ * Reads an image file as a Data URL for thumbnail preview and Gemini vision payload.
+ * Automatically optimizes images > 3.5 MB using an offscreen canvas while keeping text crisp.
  */
 export function readImageAsDataUrl(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
-    reader.onload = () => resolve(reader.result as string);
+    reader.onload = () => {
+      const rawUrl = reader.result as string;
+      // If small enough (< 3.5MB) or running in non-DOM test environment, return directly
+      if (file.size <= 3.5 * 1024 * 1024 || typeof document === 'undefined') {
+        resolve(rawUrl);
+        return;
+      }
+
+      const img = new Image();
+      img.onload = () => {
+        const maxDim = 2048;
+        let { width, height } = img;
+        if (width > maxDim || height > maxDim) {
+          const ratio = Math.min(maxDim / width, maxDim / height);
+          width = Math.round(width * ratio);
+          height = Math.round(height * ratio);
+        }
+        const canvas = document.createElement('canvas');
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) {
+          resolve(rawUrl);
+          return;
+        }
+        ctx.drawImage(img, 0, 0, width, height);
+        resolve(canvas.toDataURL('image/jpeg', 0.88));
+      };
+      img.onerror = () => resolve(rawUrl);
+      img.src = rawUrl;
+    };
     reader.onerror = (err) => reject(err);
     reader.readAsDataURL(file);
   });

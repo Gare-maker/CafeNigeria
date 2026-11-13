@@ -1569,6 +1569,18 @@ export function getGeminiApiKey(): string | null {
   return null;
 }
 
+export interface GeminiApiResponse {
+  text: string;
+  error?: string;
+  statusCode?: number;
+  finishReason?: string;
+  usageMetadata?: {
+    promptTokenCount?: number;
+    candidatesTokenCount?: number;
+    totalTokenCount?: number;
+  };
+}
+
 export async function callGeminiApi(
   systemInstruction: string,
   userPrompt: string,
@@ -1577,17 +1589,18 @@ export async function callGeminiApi(
   history?: { role: 'user' | 'model'; text: string }[],
   jsonMode: boolean = false,
   timeoutMs: number = 75000
-): Promise<{ text: string; error?: string } | null> {
+): Promise<GeminiApiResponse | null> {
   const apiKey = getGeminiApiKey();
   if (!apiKey) return null;
 
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${apiKey}`;
+  let activeModel = modelName;
 
   const contents: any[] = [];
 
-  // Multi-Turn Context Retention: Include conversation history
-  if (history && history.length > 0) {
-    for (const h of history) {
+  // Multi-Turn Context Retention: Include trimmed/managed conversation history
+  const managedHistory = history ? trimConversationHistory(history, 12) : [];
+  if (managedHistory.length > 0) {
+    for (const h of managedHistory) {
       if (h.text && h.text.trim()) {
         contents.push({
           role: h.role === 'model' ? 'model' : 'user',
@@ -1641,9 +1654,10 @@ export async function callGeminiApi(
     generationConfig,
   };
 
-  // Safe retry loop with exponential backoff (up to 3 attempts for transient issues)
+  // Safe retry loop with exponential backoff & Retry-After header support
   const maxRetries = 2;
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${activeModel}:generateContent?key=${apiKey}`;
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 
@@ -1660,36 +1674,123 @@ export async function callGeminiApi(
 
       if (!res.ok) {
         const errJson = await res.json().catch(() => null);
-        const isTransient = res.status === 429 || res.status === 503 || res.status >= 500;
-        if (isTransient && attempt < maxRetries) {
-          console.warn(`Gemini API status ${res.status}. Retrying attempt ${attempt + 1}...`);
-          await new Promise((r) => setTimeout(r, 1200 * (attempt + 1)));
+        // If 404 model not found on gemini-1.5-flash, fallback to gemini-2.0-flash
+        if (res.status === 404 && activeModel === 'gemini-1.5-flash' && attempt < maxRetries) {
+          console.warn('Model gemini-1.5-flash returned 404, falling back to gemini-2.0-flash');
+          activeModel = 'gemini-2.0-flash';
           continue;
         }
-        console.warn('Gemini API call failed with status:', res.status, errJson);
+        const isTransient = res.status === 429 || res.status === 503 || res.status >= 500;
+        if (isTransient && attempt < maxRetries) {
+          const retryAfterHdr = res.headers.get('Retry-After');
+          const retrySec = retryAfterHdr ? parseInt(retryAfterHdr, 10) : NaN;
+          const delayMs = !isNaN(retrySec) && retrySec > 0 ? Math.min(15000, retrySec * 1000) : 1200 * Math.pow(2, attempt);
+          console.warn(`Gemini API status ${res.status}. Retrying attempt ${attempt + 1} in ${delayMs}ms...`);
+          await new Promise((r) => setTimeout(r, delayMs));
+          continue;
+        }
+        // Scrub any API key from error text before returning
+        const rawErrMsg = errJson?.error?.message || `API error ${res.status}: ${res.statusText}`;
+        const safeErrMsg = rawErrMsg.replace(/AIza[0-9A-Za-z\-_]{10,}/g, '[REDACTED_KEY]');
+        console.warn('Gemini API call failed with status:', res.status, safeErrMsg);
         return {
           text: '',
-          error: errJson?.error?.message || `API error ${res.status}: ${res.statusText}`,
+          error: safeErrMsg,
+          statusCode: res.status,
         };
       }
 
       const data = await res.json();
       const candidate = data.candidates?.[0];
       const text = candidate?.content?.parts?.map((p: any) => p.text).join('') || '';
-      return { text };
+      return {
+        text,
+        finishReason: candidate?.finishReason,
+        usageMetadata: data.usageMetadata,
+      };
     } catch (err: any) {
       clearTimeout(timeoutId);
       if (attempt < maxRetries) {
-        console.warn(`Gemini API connection error on attempt ${attempt}. Retrying...`);
-        await new Promise((r) => setTimeout(r, 1200 * (attempt + 1)));
+        const delayMs = 1200 * Math.pow(2, attempt);
+        console.warn(`Gemini API connection error on attempt ${attempt}. Retrying in ${delayMs}ms...`);
+        await new Promise((r) => setTimeout(r, delayMs));
         continue;
       }
-      console.warn('Gemini API fetch error:', err);
-      return { text: '', error: err?.message || 'Network error connecting to Gemini API' };
+      const msg = (err?.message || 'Network error connecting to Gemini API').replace(/AIza[0-9A-Za-z\-_]{10,}/g, '[REDACTED_KEY]');
+      console.warn('Gemini API fetch error:', msg);
+      return { text: '', error: msg };
     }
   }
 
   return null;
+}
+
+/**
+ * Context-Window Manager: Preserves initial goal turn + recent turns, summarizing middle turns
+ * when conversation history exceeds maxTurns so token limits are never exceeded.
+ */
+export function trimConversationHistory(
+  history: { role: 'user' | 'model'; text: string }[],
+  maxTurns: number = 12
+): { role: 'user' | 'model'; text: string }[] {
+  if (!history || history.length <= maxTurns) return history || [];
+  const head = history.slice(0, 2);
+  const middle = history.slice(2, history.length - (maxTurns - 3));
+  const tail = history.slice(history.length - (maxTurns - 3));
+
+  const middleSummaryPoints = middle
+    .filter((m) => m.role === 'user')
+    .map((m) => m.text.slice(0, 80).replace(/\s+/g, ' '))
+    .slice(0, 5)
+    .join('; ');
+
+  const summaryTurn: { role: 'user' | 'model'; text: string } = {
+    role: 'user',
+    text: `[Earlier conversation summary (${middle.length} messages): User discussed ${middleSummaryPoints || 'document edits and questions'}.]`,
+  };
+
+  return [...head, summaryTurn, ...tail];
+}
+
+/**
+ * Parses explicit or approximate requested page counts (digits or number words)
+ */
+export function parseRequestedPageCount(prompt: string): { requestedPages: number; isExplicit: boolean } {
+  const digitMatch =
+    prompt.match(/(?:about|approximately|around|roughly|at least)?\s*\b(\d{1,2})\s*(?:-| )?pages?\b/i) ||
+    prompt.match(/\bpage\s*(\d{1,2})\b/i);
+  if (digitMatch) {
+    const val = parseInt(digitMatch[1], 10);
+    if (!isNaN(val) && val >= 1) {
+      return { requestedPages: Math.min(25, val), isExplicit: true };
+    }
+  }
+
+  const wordMap: Record<string, number> = {
+    three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8,
+    nine: 9, ten: 10, eleven: 11, twelve: 12, thirteen: 13,
+    fourteen: 14, fifteen: 15, sixteen: 16, eighteen: 18, twenty: 20,
+  };
+  const wordRegex = new RegExp(`\\b(${Object.keys(wordMap).join('|')})(?:-| )?pages?\\b`, 'i');
+  const wordMatch = prompt.match(wordRegex);
+  if (wordMatch) {
+    return { requestedPages: wordMap[wordMatch[1].toLowerCase()] || 8, isExplicit: true };
+  }
+
+  if (/comprehensive|dissertation|thesis|research project|chapters|in-depth|extensive/i.test(prompt)) {
+    return { requestedPages: 8, isExplicit: false };
+  }
+  return { requestedPages: 5, isExplicit: false };
+}
+
+/**
+ * Sanitizes HTML before rendering inside chat bubbles
+ */
+export function sanitizeChatHtml(html: string): string {
+  return html
+    .replace(/<script[\s\S]*?>[\s\S]*?<\/script>/gi, '')
+    .replace(/<iframe[\s\S]*?>[\s\S]*?<\/iframe>/gi, '')
+    .replace(/\son\w+\s*=\s*["'][^"']*["']/gi, '');
 }
 
 /**
@@ -1744,6 +1845,14 @@ export function convertMarkdownOrTextToHtml(raw: string): string {
   let inTable = false;
   let tableRows: string[][] = [];
   let inList: 'ul' | 'ol' | null = null;
+  let inCodeBlock = false;
+  let codeLines: string[] = [];
+
+  const formatInline = (str: string) =>
+    str
+      .replace(/`([^`]+)`/g, '<code style="background: rgba(100,116,139,0.12); padding: 1px 4px; border-radius: 3px; font-family: monospace; font-size: 0.9em;">$1</code>')
+      .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
+      .replace(/\*(.*?)\*/g, '<em>$1</em>');
 
   const flushTable = () => {
     if (tableRows.length > 0) {
@@ -1751,13 +1860,13 @@ export function convertMarkdownOrTextToHtml(raw: string): string {
       const header = tableRows[0];
       tHtml += '<thead><tr>';
       header.forEach((h) => {
-        tHtml += `<th style="border: 1px solid #CBD5E1; padding: 8px 12px; background: #F8FAFC; text-align: left;">${h}</th>`;
+        tHtml += `<th style="border: 1px solid #CBD5E1; padding: 8px 12px; background: #F8FAFC; text-align: left;">${formatInline(h)}</th>`;
       });
       tHtml += '</tr></thead><tbody>';
       for (let r = 1; r < tableRows.length; r++) {
         tHtml += '<tr>';
         tableRows[r].forEach((c) => {
-          tHtml += `<td style="border: 1px solid #E2E8F0; padding: 8px 12px;">${c}</td>`;
+          tHtml += `<td style="border: 1px solid #E2E8F0; padding: 8px 12px;">${formatInline(c)}</td>`;
         });
         tHtml += '</tr>';
       }
@@ -1776,7 +1885,34 @@ export function convertMarkdownOrTextToHtml(raw: string): string {
   };
 
   for (let i = 0; i < lines.length; i++) {
-    const line = lines[i].trim();
+    const rawLine = lines[i];
+    const line = rawLine.trim();
+
+    // Fenced code blocks
+    if (line.startsWith('```')) {
+      if (!inCodeBlock) {
+        flushTable();
+        flushList();
+        inCodeBlock = true;
+        codeLines = [];
+      } else {
+        const escapedCode = codeLines
+          .join('\n')
+          .replace(/&/g, '&amp;')
+          .replace(/</g, '&lt;')
+          .replace(/>/g, '&gt;');
+        htmlParts.push(
+          `<pre style="background: #0F172A; color: #E2E8F0; padding: 10px 12px; border-radius: 4px; overflow-x: auto; font-size: 11px; margin: 8px 0;"><code>${escapedCode}</code></pre>`
+        );
+        inCodeBlock = false;
+        codeLines = [];
+      }
+      continue;
+    }
+    if (inCodeBlock) {
+      codeLines.push(rawLine);
+      continue;
+    }
 
     // Table line
     if (line.startsWith('|') && line.endsWith('|')) {
@@ -1785,7 +1921,6 @@ export function convertMarkdownOrTextToHtml(raw: string): string {
         .slice(1, -1)
         .split('|')
         .map((c) => c.trim());
-      // Skip delimiter row e.g. |---|---|
       if (cells.every((c) => /^:?-+:?$/.test(c))) {
         continue;
       }
@@ -1803,7 +1938,7 @@ export function convertMarkdownOrTextToHtml(raw: string): string {
         htmlParts.push('<ul style="margin: 8px 0; padding-left: 24px;">');
         inList = 'ul';
       }
-      htmlParts.push(`<li>${line.replace(/^[-*]\s+/, '')}</li>`);
+      htmlParts.push(`<li>${formatInline(line.replace(/^[-*]\s+/, ''))}</li>`);
       continue;
     }
 
@@ -1814,7 +1949,7 @@ export function convertMarkdownOrTextToHtml(raw: string): string {
         htmlParts.push('<ol style="margin: 8px 0; padding-left: 24px;">');
         inList = 'ol';
       }
-      htmlParts.push(`<li>${line.replace(/^\d+\.\s+/, '')}</li>`);
+      htmlParts.push(`<li>${formatInline(line.replace(/^\d+\.\s+/, ''))}</li>`);
       continue;
     }
 
@@ -1826,17 +1961,13 @@ export function convertMarkdownOrTextToHtml(raw: string): string {
 
     // Headings
     if (line.startsWith('### ')) {
-      htmlParts.push(`<h3>${line.slice(4)}</h3>`);
+      htmlParts.push(`<h3>${formatInline(line.slice(4))}</h3>`);
     } else if (line.startsWith('## ')) {
-      htmlParts.push(`<h2>${line.slice(3)}</h2>`);
+      htmlParts.push(`<h2>${formatInline(line.slice(3))}</h2>`);
     } else if (line.startsWith('# ')) {
-      htmlParts.push(`<h1>${line.slice(2)}</h1>`);
+      htmlParts.push(`<h1>${formatInline(line.slice(2))}</h1>`);
     } else {
-      // Bold / Italic formatting
-      const formatted = line
-        .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
-        .replace(/\*(.*?)\*/g, '<em>$1</em>');
-      htmlParts.push(`<p>${formatted}</p>`);
+      htmlParts.push(`<p>${formatInline(line)}</p>`);
     }
   }
 
@@ -2309,19 +2440,9 @@ export async function generateMultiSectionDocumentAsync(
   const refStyle = optional.referencingStyle || 'APA 7th Edition';
   const wordCount = optional.wordCount || 'Comprehensive multi-page academic document';
 
-  // 1. Detect requested target page count (e.g. "12-page", "12 pages", "10 pages")
-  const pageMatch = prompt.match(/\b(\d+)\s*(?:-| )?pages?\b/i) || prompt.match(/\bpage\s*(\d+)\b/i);
-  let targetSections = pageMatch ? parseInt(pageMatch[1], 10) : 0;
-
-  if (targetSections < 3 || isNaN(targetSections)) {
-    if (/comprehensive|dissertation|thesis|research project|chapters|in-depth|extensive/i.test(prompt)) {
-      targetSections = 8;
-    } else {
-      targetSections = 5;
-    }
-  }
-  // Cap between 3 and 16 for safe browser execution
-  targetSections = Math.min(16, Math.max(3, targetSections));
+  // 1. Detect requested target page count using numeric + word-number parser
+  const parsedPageReq = parseRequestedPageCount(prompt);
+  let targetSections = Math.min(20, Math.max(3, parsedPageReq.requestedPages));
 
   if (!apiKey) {
     // Offline local template generation
@@ -2382,8 +2503,13 @@ Return ONLY valid JSON matching this schema:
       'gemini-1.5-flash',
       attachments,
       undefined,
-      true
+      true,
+      60000
     );
+
+    if (outlineRes?.error && (outlineRes.statusCode === 401 || outlineRes.statusCode === 403 || outlineRes.statusCode === 400)) {
+      throw new Error(outlineRes.error);
+    }
 
     if (outlineRes && outlineRes.text) {
       const parsed = safeParseJson<any>(outlineRes.text);
@@ -2392,7 +2518,10 @@ Return ONLY valid JSON matching this schema:
         sections = parsed.sections;
       }
     }
-  } catch (err) {
+  } catch (err: any) {
+    if (err?.message && /API key|unauthorized|permission|401|403/i.test(err.message)) {
+      throw err;
+    }
     console.warn('Outline generation failed:', err);
   }
 
@@ -2466,8 +2595,33 @@ Write the full, complete HTML content for this section now:
         60000
       );
 
+      if (secRes?.error && (secRes.statusCode === 401 || secRes.statusCode === 403)) {
+        throw new Error(secRes.error);
+      }
+
       if (secRes && secRes.text) {
         let secHtml = secRes.text.replace(/^```html\s*/i, '').replace(/```\s*$/i, '').trim();
+
+        // Check if truncated due to MAX_TOKENS or under-length (< 200 words)
+        const plainWords = secHtml.replace(/<[^>]+>/g, ' ').trim().split(/\s+/).filter(Boolean).length;
+        if (secRes.finishReason === 'MAX_TOKENS' || plainWords < 200) {
+          onProgress?.(`Expanding Section ${secNum} of ${sections.length} for full depth...`);
+          const tailSnippet = secHtml.slice(-280);
+          const contRes = await callGeminiApi(
+            sectionSystem,
+            `Continue and complete Section ${secNum} ("${sec.sectionTitle}") seamlessly from where it stopped below WITHOUT repeating earlier paragraphs:\n\n...${tailSnippet}`,
+            'gemini-1.5-flash',
+            undefined,
+            undefined,
+            false,
+            60000
+          );
+          if (contRes && contRes.text && contRes.text.trim().length > 40) {
+            const contHtml = contRes.text.replace(/^```html\s*/i, '').replace(/```\s*$/i, '').trim();
+            secHtml = `${secHtml}\n${contHtml}`;
+          }
+        }
+
         if (secHtml.length > 50) {
           if (secNum === 1 && !secHtml.includes('<h1')) {
             secHtml = `<h1>${documentTitle.toUpperCase()}</h1>\n` + secHtml;
@@ -2570,7 +2724,8 @@ export async function runWorkspaceAIPromptAsync(
     type?: string;
   }[] = [],
   attachments?: AIAttachment[],
-  conversationHistory?: { role: 'user' | 'model'; text: string }[]
+  conversationHistory?: { role: 'user' | 'model'; text: string }[],
+  onProgress?: (statusMessage: string) => void
 ): Promise<WorkspaceAIResult> {
   const apiKey = getGeminiApiKey();
 
@@ -2583,6 +2738,7 @@ export async function runWorkspaceAIPromptAsync(
     );
 
   if (isImageToTextPrompt && attachments) {
+    onProgress?.('Extracting text and tables from image with Gemini Vision...');
     const targetImg = attachments.find((a) => a.type === 'image' && a.dataUrl)!;
     const ocrResult = await extractTextFromImageAI(targetImg, prompt);
     const summary = `Extracted readable text and structure from image "${targetImg.name}".`;
@@ -2600,9 +2756,10 @@ export async function runWorkspaceAIPromptAsync(
   }
 
   // 2. Check for Multi-Page Document Creation Request (e.g. 12 pages)
+  const parsedPageCount = parseRequestedPageCount(prompt);
   const isMultiPageRequest =
-    /\b(\d+)\s*(?:-| )?pages?\b/i.test(prompt) ||
-    /(write|create|generate)\s+(?:a\s+)?(?:\d+\s+page|comprehensive|extensive|long)\s+document/i.test(prompt);
+    parsedPageCount.isExplicit ||
+    /(write|create|generate)\s+(?:a\s+)?(?:comprehensive|extensive|long)\s+document/i.test(prompt);
 
   if (isMultiPageRequest && apiKey) {
     try {
@@ -2616,7 +2773,8 @@ export async function runWorkspaceAIPromptAsync(
           courseCode: doc.metadata.courseCode,
           studentName: doc.metadata.studentName,
           referencingStyle: doc.metadata.referencingStyle,
-        }
+        },
+        onProgress
       );
 
       const summary = multiResult.summary;
@@ -2708,6 +2866,16 @@ ${prompt}
         true
       );
 
+      if (response?.error) {
+        return {
+          summary: 'AI Request Failed',
+          chatResponse: `**AI Request Could Not Be Completed:** ${response.error}\n\nPlease verify your Gemini API key in Settings or try again shortly. Your existing document was not modified.`,
+          generatedHtml: '',
+          action: 'conversation',
+          sources: [],
+        };
+      }
+
       if (response && response.text) {
         const parsed = safeParseJson<any>(response.text);
         if (parsed) {
@@ -2758,14 +2926,30 @@ ${prompt}
             sources,
           };
         }
+
+        // If Gemini returned valid prose/markdown instead of JSON, surface it conversationally instead of dropping it
+        return {
+          summary: 'Conversational AI Response',
+          chatResponse: response.text.trim(),
+          generatedHtml: convertMarkdownOrTextToHtml(response.text.trim()),
+          action: 'conversation',
+          sources: extractSourceReferences(prompt, uploadedReferences),
+        };
       }
-    } catch (err) {
-      console.warn('Gemini API call failed, falling back to local NLP engine:', err);
+    } catch (err: any) {
+      console.warn('Gemini API call failed:', err);
+      return {
+        summary: 'AI Request Failed',
+        chatResponse: `**AI Request Could Not Be Completed:** ${err?.message || 'Unexpected error connecting to Gemini API.'}\n\nYour document remains unchanged.`,
+        generatedHtml: '',
+        action: 'conversation',
+        sources: [],
+      };
     }
   }
 
-  // Seamless fallback to local NLP engine
-  return runWorkspaceAIPrompt(
+  // Seamless fallback to local NLP engine when offline or no API key configured
+  const fallbackResult = runWorkspaceAIPrompt(
     prompt,
     doc,
     selectedText,
@@ -2774,6 +2958,10 @@ ${prompt}
     explicitPageIndices,
     uploadedReferences
   );
+  return {
+    ...fallbackResult,
+    chatResponse: fallbackResult.chatResponse || fallbackResult.summary,
+  };
 }
 
 /**

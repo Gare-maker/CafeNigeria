@@ -78,6 +78,8 @@ import {
   runWorkspaceAIPrompt,
   runWorkspaceAIPromptAsync,
   getGeminiApiKey,
+  convertMarkdownOrTextToHtml,
+  sanitizeChatHtml,
   WorkspaceAIResult,
   extractSourceReferences,
   parseGroupingInstruction,
@@ -2322,7 +2324,8 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
         explicitPageIndices,
         aiUploadedRefs,
         aiUploadedRefs,
-        conversationHistory
+        conversationHistory,
+        (progressMsg) => setAiProgressMessage(progressMsg)
       );
 
       const shouldApplyDocUpdates = result.action !== 'conversation' && result.action !== 'ocr_extract';
@@ -5853,17 +5856,18 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
                     <div>
                       {msg.chatResponse ? (
                         <div
+                          className="nc-chat-markdown"
                           style={{
                             fontSize: '12.5px',
                             color: 'var(--ink-rich)',
                             lineHeight: 1.55,
-                            whiteSpace: 'pre-wrap',
                             wordBreak: 'break-word',
                             marginBottom: '6px',
                           }}
-                        >
-                          {msg.chatResponse}
-                        </div>
+                          dangerouslySetInnerHTML={{
+                            __html: sanitizeChatHtml(convertMarkdownOrTextToHtml(msg.chatResponse)),
+                          }}
+                        />
                       ) : (
                         <div
                           style={{
