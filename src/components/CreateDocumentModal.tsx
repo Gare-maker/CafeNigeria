@@ -382,7 +382,7 @@ export const CreateDocumentModal: React.FC<CreateDocumentModalProps> = ({
     setFinIncludeTables(spec.requiresTable || /table|data|financial|projection|comparison/i.test(effectivePrompt));
     setFinIncludeReferences(spec.requiresReferences || category === 'projects' || category === 'seminars');
     setGenerationError(null);
-    setGenerationStep('finalize');
+    setGenerationStep('prompt');
   };
 
   // Section 7 Option A: Create with AI (Supports Multimodal Image-to-Doc and Reference-Aware Generation)
@@ -520,26 +520,23 @@ export const CreateDocumentModal: React.FC<CreateDocumentModalProps> = ({
         const parsedPagesNum = parseInt(finTargetPages, 10);
         const parsedWordsNum = parseInt(finTargetWords.replace(/,/g, ''), 10);
         const parsedSectionsNum = parseInt(finTargetSections, 10);
-        const finalizationSpec: GenerationFinalizationSpec | undefined =
-          generationStep === 'finalize'
-            ? {
-                title: finTitle.trim() || undefined,
-                documentType: finDocType,
-                instructions: finInstructions.trim() || effectivePrompt,
-                targetPages: !isNaN(parsedPagesNum) && parsedPagesNum > 0 ? parsedPagesNum : undefined,
-                targetWords: !isNaN(parsedWordsNum) && parsedWordsNum > 0 ? parsedWordsNum : undefined,
-                targetSections: !isNaN(parsedSectionsNum) && parsedSectionsNum > 0 ? parsedSectionsNum : undefined,
-                requiredHeadings: finRequiredHeadings.trim() || undefined,
-                topicsToCover: finTopicsToCover.trim() || undefined,
-                includeTables: finIncludeTables,
-                includeReferences: finIncludeReferences,
-                writingStyle: finWritingStyle,
-                tone: finTone,
-                detailLevel: finDetailLevel,
-                audience: finAudience.trim() || undefined,
-                language: finLanguage.trim() || 'English',
-              }
-            : undefined;
+        const finalizationSpec: GenerationFinalizationSpec = {
+          title: finTitle.trim() || undefined,
+          documentType: finDocType,
+          instructions: finInstructions.trim() || effectivePrompt,
+          targetPages: !isNaN(parsedPagesNum) && parsedPagesNum > 0 ? parsedPagesNum : undefined,
+          targetWords: !isNaN(parsedWordsNum) && parsedWordsNum > 0 ? parsedWordsNum : undefined,
+          targetSections: !isNaN(parsedSectionsNum) && parsedSectionsNum > 0 ? parsedSectionsNum : undefined,
+          requiredHeadings: finRequiredHeadings.trim() || undefined,
+          topicsToCover: finTopicsToCover.trim() || undefined,
+          includeTables: finIncludeTables,
+          includeReferences: finIncludeReferences,
+          writingStyle: finWritingStyle,
+          tone: finTone,
+          detailLevel: finDetailLevel,
+          audience: finAudience.trim() || undefined,
+          language: finLanguage.trim() || 'English',
+        };
 
         const generated = await generateDocumentFromNaturalPromptAsync(
           category,
@@ -1511,50 +1508,69 @@ export const CreateDocumentModal: React.FC<CreateDocumentModalProps> = ({
                     </button>
                   </div>
 
-                  <button
-                    type="button"
-                    disabled={isGenerating || (!prompt.trim() && uploadedFiles.length === 0)}
-                    onClick={handleOpenFinalization}
-                    className="btn-ed-primary"
-                    style={{ padding: '6px 14px', fontSize: '11.5px', gap: '6px' }}
-                  >
-                    <Send size={12} />
-                    <span>{isGenerating ? 'Generating...' : 'Review & Generate'}</span>
-                  </button>
+                  <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+                    <button
+                      type="button"
+                      disabled={isGenerating || (!prompt.trim() && uploadedFiles.length === 0)}
+                      onClick={handleOpenFinalization}
+                      className="btn-ed-subtle"
+                      style={{ padding: '6px 10px', fontSize: '11px' }}
+                      title="Auto-fill Title, Length, and Sections below from your AI prompt"
+                    >
+                      Auto-Fill Format
+                    </button>
+                    <button
+                      type="button"
+                      disabled={
+                        isGenerating ||
+                        (!prompt.trim() && !finInstructions.trim() && uploadedFiles.length === 0)
+                      }
+                      onClick={handleGenerate}
+                      className="btn-ed-primary"
+                      style={{ padding: '6px 14px', fontSize: '11.5px', gap: '6px' }}
+                    >
+                      <Send size={12} />
+                      <span>{isGenerating ? 'Generating...' : 'Generate Document'}</span>
+                    </button>
+                  </div>
                 </div>
               </div>
 
-              {/* Section 3: Document Generation Finalization Interface */}
-              {generationStep === 'finalize' && (
-                <div
-                  style={{
-                    border: '1px solid var(--accent-blue)',
-                    backgroundColor: 'var(--bg-ivory)',
-                    padding: '16px',
-                    display: 'flex',
-                    flexDirection: 'column',
-                    gap: '12px',
-                  }}
-                >
-                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px' }}>
-                    <div>
-                      <span style={{ fontSize: '13px', fontWeight: 700, color: 'var(--ink-navy)', display: 'block' }}>
-                        Document Generation Finalization
-                      </span>
-                      <span style={{ fontSize: '11px', color: 'var(--ink-muted)' }}>
-                        Review and refine your document parameters before generating actual content.
-                      </span>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => setGenerationStep('prompt')}
-                      className="btn-ed-subtle"
-                      style={{ fontSize: '11px', padding: '4px 10px' }}
-                      disabled={isGenerating}
-                    >
-                      Back to Prompt
-                    </button>
+              {/* Section 3: Document Generation Format & Finalization Controls (Shown Together with AI Input) */}
+              <div
+                style={{
+                  border: '1px solid var(--border-stone)',
+                  backgroundColor: 'var(--bg-ivory)',
+                  padding: '16px',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: '12px',
+                }}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px', flexWrap: 'wrap' }}>
+                  <div>
+                    <span style={{ fontSize: '13px', fontWeight: 700, color: 'var(--ink-navy)', display: 'block' }}>
+                      Document Generation Format &amp; Specifications
+                    </span>
+                    <span style={{ fontSize: '11px', color: 'var(--ink-muted)' }}>
+                      Configure title, type, page/word targets, structure, and writing style alongside your AI prompt.
+                    </span>
                   </div>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setGenerationStep((prev) => (prev === 'finalize' ? 'prompt' : 'finalize'))
+                    }
+                    className="btn-ed-subtle"
+                    style={{ fontSize: '11px', padding: '4px 10px' }}
+                    disabled={isGenerating}
+                  >
+                    {generationStep === 'finalize' ? 'Show Format Fields' : 'Compact View'}
+                  </button>
+                </div>
+
+                {generationStep === 'prompt' && (
+                  <>
 
                   {/* A & B: Title & Document Type */}
                   <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(210px, 1fr))', gap: '10px' }}>
@@ -1734,63 +1750,58 @@ export const CreateDocumentModal: React.FC<CreateDocumentModalProps> = ({
                       />
                     </div>
                   </div>
+                  </>
+                )}
 
-                  {generationError && (
-                    <div
-                      style={{
-                        padding: '10px 14px',
-                        backgroundColor: '#FEF2F2',
-                        border: '1px solid #FECACA',
-                        fontSize: '12px',
-                        color: '#B91C1C',
-                        display: 'flex',
-                        alignItems: 'flex-start',
-                        gap: '8px',
-                      }}
-                    >
-                      <AlertCircle size={15} style={{ flexShrink: 0, marginTop: '2px' }} />
-                      <span>{generationError}</span>
-                    </div>
-                  )}
-
-                  {isGenerating && extractionStatus && (
-                    <div
-                      style={{
-                        padding: '10px 14px',
-                        backgroundColor: 'rgba(20, 71, 230, 0.06)',
-                        border: '1px solid rgba(20, 71, 230, 0.25)',
-                        fontSize: '12px',
-                        color: 'var(--ink-navy)',
-                      }}
-                    >
-                      {extractionStatus}
-                    </div>
-                  )}
-
-                  {/* G: Prominent Generate Document Button */}
-                  <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px', marginTop: '4px' }}>
-                    <button
-                      type="button"
-                      onClick={() => setGenerationStep('prompt')}
-                      className="btn-ed-subtle"
-                      disabled={isGenerating}
-                      style={{ padding: '9px 14px', fontSize: '12px' }}
-                    >
-                      Cancel / Edit Prompt
-                    </button>
-                    <button
-                      type="button"
-                      onClick={handleGenerate}
-                      disabled={isGenerating}
-                      className="btn-ed-primary"
-                      style={{ padding: '9px 18px', fontSize: '12.5px', fontWeight: 700, gap: '6px' }}
-                    >
-                      <Sparkles size={14} />
-                      <span>{isGenerating ? 'Generating Document...' : 'Generate Document'}</span>
-                    </button>
+                {generationError && (
+                  <div
+                    style={{
+                      padding: '10px 14px',
+                      backgroundColor: '#FEF2F2',
+                      border: '1px solid #FECACA',
+                      fontSize: '12px',
+                      color: '#B91C1C',
+                      display: 'flex',
+                      alignItems: 'flex-start',
+                      gap: '8px',
+                    }}
+                  >
+                    <AlertCircle size={15} style={{ flexShrink: 0, marginTop: '2px' }} />
+                    <span>{generationError}</span>
                   </div>
+                )}
+
+                {isGenerating && extractionStatus && (
+                  <div
+                    style={{
+                      padding: '10px 14px',
+                      backgroundColor: 'rgba(20, 71, 230, 0.06)',
+                      border: '1px solid rgba(20, 71, 230, 0.25)',
+                      fontSize: '12px',
+                      color: 'var(--ink-navy)',
+                    }}
+                  >
+                    {extractionStatus}
+                  </div>
+                )}
+
+                {/* G: Prominent Generate Document Button */}
+                <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px', marginTop: '4px' }}>
+                  <button
+                    type="button"
+                    onClick={handleGenerate}
+                    disabled={
+                      isGenerating ||
+                      (!prompt.trim() && !finInstructions.trim() && uploadedFiles.length === 0)
+                    }
+                    className="btn-ed-primary"
+                    style={{ padding: '9px 18px', fontSize: '12.5px', fontWeight: 700, gap: '6px' }}
+                  >
+                    <Sparkles size={14} />
+                    <span>{isGenerating ? 'Generating Document...' : 'Generate Document'}</span>
+                  </button>
                 </div>
-              )}
+              </div>
 
               {/* Workspace Doc Selection Popover (Section 5) */}
               {showWorkspaceDocPicker && (

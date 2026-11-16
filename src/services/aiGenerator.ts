@@ -1,4 +1,4 @@
-﻿import {
+import {
   AIAttachment,
   CategoryMeta,
   DocumentCategory,
@@ -1667,12 +1667,13 @@ const RETIRED_MODELS = new Set([
   'gemini-1.5-pro-latest',
   'gemini-2.0-flash',
   'gemini-2.0-flash-exp',
+  'gemini-2.5-pro',
 ]);
 
 const GEMINI_MODEL_FALLBACK_CHAIN = [
-  'gemini-2.5-flash',
   'gemini-3.0-flash',
-  'gemini-2.5-pro',
+  'gemini-3.1-pro-preview',
+  'gemini-2.5-flash',
 ];
 
 export async function callGeminiApi(
@@ -1687,7 +1688,7 @@ export async function callGeminiApi(
   const apiKey = getGeminiApiKey();
   if (!apiKey) return null;
 
-  let activeModel = RETIRED_MODELS.has(modelName) ? 'gemini-2.5-flash' : modelName;
+  let activeModel = RETIRED_MODELS.has(modelName) ? 'gemini-3.0-flash' : modelName;
   const triedModels = new Set<string>();
 
   const contents: any[] = [];
@@ -1750,7 +1751,7 @@ export async function callGeminiApi(
   };
 
   // Safe retry loop with exponential backoff, model fallback chain & Retry-After header support
-  const maxRetries = 3;
+  const maxRetries = 4;
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     triedModels.add(activeModel);
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${activeModel}:generateContent?key=${apiKey}`;
