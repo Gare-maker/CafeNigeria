@@ -1573,6 +1573,61 @@ export function getGeminiApiKey(): string | null {
   return null;
 }
 
+export function getGeminiApiKeySource(): 'localStorage' | 'env' | 'window' | 'none' {
+  try {
+    const local = localStorage.getItem('nc_gemini_api_key');
+    if (local && local.trim()) return 'localStorage';
+  } catch {
+    // localStorage may be unavailable
+  }
+  const envKey = (import.meta as any).env?.VITE_GEMINI_API_KEY;
+  if (envKey && typeof envKey === 'string' && envKey.trim()) return 'env';
+  const winKey = (window as any).__GEMINI_API_KEY__;
+  if (winKey && typeof winKey === 'string' && winKey.trim()) return 'window';
+  return 'none';
+}
+
+export async function testGeminiConnection(
+  apiKeyOverride?: string
+): Promise<{ ok: boolean; statusCode?: number; message: string }> {
+  const key = (apiKeyOverride && apiKeyOverride.trim()) || getGeminiApiKey();
+  if (!key) {
+    return {
+      ok: false,
+      message: 'No Gemini API key configured. Enter a key in Settings or set VITE_GEMINI_API_KEY in .env.local.',
+    };
+  }
+  try {
+    const url = `https://generativelanguage.googleapis.com/v1beta/models?pageSize=1&key=${encodeURIComponent(key)}`;
+    const res = await fetch(url, { method: 'GET' });
+    if (res.ok) {
+      return {
+        ok: true,
+        statusCode: res.status,
+        message: 'Connected to Google Gemini API successfully.',
+      };
+    }
+    let errText = res.statusText || 'Request failed';
+    try {
+      const body = await res.json();
+      if (body?.error?.message) errText = body.error.message;
+    } catch {
+      // ignore non-json error body
+    }
+    const safeMsg = errText.replace(/AIza[0-9A-Za-z_-]{20,}/g, '[REDACTED_KEY]');
+    return {
+      ok: false,
+      statusCode: res.status,
+      message: `Gemini API returned HTTP ${res.status}: ${safeMsg}`,
+    };
+  } catch (err: any) {
+    return {
+      ok: false,
+      message: `Network error reaching Gemini API: ${err?.message || 'Unknown error'}`,
+    };
+  }
+}
+
 export interface GeminiApiResponse {
   text: string;
   error?: string;

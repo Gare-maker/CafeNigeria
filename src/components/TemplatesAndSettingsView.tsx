@@ -28,6 +28,10 @@ import {
   AIUsageRecord,
   WalletTransaction,
 } from '../types';
+import {
+  getGeminiApiKeySource,
+  testGeminiConnection,
+} from '../services/aiGenerator';
 
 interface SettingsViewProps {
   onBackHome: () => void;
@@ -98,6 +102,12 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   });
   const [savedNotice, setSavedNotice] = useState(false);
   const [actionNotice, setActionNotice] = useState<string | null>(null);
+  const [isTestingConnection, setIsTestingConnection] = useState(false);
+  const [connectionStatus, setConnectionStatus] = useState<{
+    ok: boolean;
+    message: string;
+  } | null>(null);
+  const keySource = getGeminiApiKeySource();
 
   const showNotification = (msg: string) => {
     setActionNotice(msg);
@@ -121,9 +131,27 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   };
 
   const handleSavePreferences = () => {
-    localStorage.setItem('nc_gemini_api_key', geminiApiKey.trim());
+    const trimmed = geminiApiKey.trim();
+    if (trimmed) {
+      localStorage.setItem('nc_gemini_api_key', trimmed);
+    } else {
+      localStorage.removeItem('nc_gemini_api_key');
+    }
+    setConnectionStatus(null);
     setSavedNotice(true);
     setTimeout(() => setSavedNotice(false), 2500);
+  };
+
+  const handleTestConnection = async () => {
+    setIsTestingConnection(true);
+    setConnectionStatus(null);
+    const trimmed = geminiApiKey.trim();
+    if (trimmed) {
+      localStorage.setItem('nc_gemini_api_key', trimmed);
+    }
+    const result = await testGeminiConnection(trimmed || undefined);
+    setConnectionStatus({ ok: result.ok, message: result.message });
+    setIsTestingConnection(false);
   };
 
   const usageStatus = billingManager.getUsageStatus();
@@ -974,18 +1002,83 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                   </div>
                 </div>
 
-                {/* Google Gemini API Key Configuration (Section 2) */}
+                {/* Google Gemini API Key Configuration */}
                 <div>
-                  <label className="ed-field-label">Google Gemini API Key (Optional Override)</label>
-                  <input
-                    type="password"
-                    value={geminiApiKey}
-                    onChange={(e) => setGeminiApiKey(e.target.value)}
-                    placeholder="AIzaSy... (leave blank to use default proxy)"
-                    className="ed-input"
-                  />
-                  <span style={{ fontSize: '11px', color: 'var(--ink-muted)' }}>
-                    Requests connect securely to Google Cloud Project 175673940381. You can optionally supply your personal Gemini API key here.
+                  <div
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                      gap: '8px',
+                      marginBottom: '4px',
+                      flexWrap: 'wrap',
+                    }}
+                  >
+                    <label className="ed-field-label" style={{ marginBottom: 0 }}>
+                      Google Gemini API Key
+                    </label>
+                    <span
+                      style={{
+                        fontFamily: 'var(--font-mono)',
+                        fontSize: '10px',
+                        padding: '2px 8px',
+                        borderRadius: '4px',
+                        backgroundColor:
+                          keySource === 'none' ? '#FEF2F2' : '#ECFDF5',
+                        color: keySource === 'none' ? '#B91C1C' : '#047857',
+                        border:
+                          keySource === 'none'
+                            ? '1px solid #FECACA'
+                            : '1px solid #A7F3D0',
+                      }}
+                    >
+                      {keySource === 'localStorage'
+                        ? 'Connected (Saved Key)'
+                        : keySource === 'env'
+                        ? 'Connected (.env VITE_GEMINI_API_KEY)'
+                        : keySource === 'window'
+                        ? 'Connected (Runtime Global)'
+                        : 'Not Connected'}
+                    </span>
+                  </div>
+                  <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
+                    <input
+                      type="password"
+                      value={geminiApiKey}
+                      onChange={(e) => setGeminiApiKey(e.target.value)}
+                      placeholder="AIzaSy... (enter your Google AI Studio Gemini API key)"
+                      className="ed-input"
+                      style={{ flex: 1, minWidth: '220px' }}
+                    />
+                    <button
+                      type="button"
+                      onClick={handleTestConnection}
+                      disabled={isTestingConnection}
+                      className="btn-ed-outline"
+                      style={{ whiteSpace: 'nowrap' }}
+                    >
+                      {isTestingConnection ? 'Testing...' : 'Test Connection'}
+                    </button>
+                  </div>
+                  {connectionStatus && (
+                    <div
+                      style={{
+                        marginTop: '6px',
+                        padding: '6px 10px',
+                        fontSize: '11.5px',
+                        borderRadius: '4px',
+                        backgroundColor: connectionStatus.ok ? '#ECFDF5' : '#FEF2F2',
+                        color: connectionStatus.ok ? '#047857' : '#B91C1C',
+                        border: connectionStatus.ok
+                          ? '1px solid #A7F3D0'
+                          : '1px solid #FECACA',
+                      }}
+                    >
+                      {connectionStatus.message}
+                    </div>
+                  )}
+                  <span style={{ fontSize: '11px', color: 'var(--ink-muted)', display: 'block', marginTop: '4px' }}>
+                    Stored locally in your browser (`nc_gemini_api_key`) or loaded from `VITE_GEMINI_API_KEY` in `.env.local`.
                   </span>
                 </div>
 
