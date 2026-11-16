@@ -9,7 +9,7 @@ import {
   RotateCcw,
   Check,
 } from 'lucide-react';
-import { PageLayoutSettings } from '../types';
+import { ColumnBorderConfig, DEFAULT_COLUMN_BORDER, PageLayoutSettings } from '../types';
 
 interface PageLayoutModalProps {
   layout: PageLayoutSettings;
@@ -211,6 +211,111 @@ export const PageLayoutModal: React.FC<PageLayoutModalProps> = ({
       layout.sectionColumns[activePageIndex]) ||
     layout.columns ||
     1;
+
+  const [selectedColIdx, setSelectedColIdx] = useState<number>(0);
+
+  useEffect(() => {
+    if (selectedColIdx >= currentCols) {
+      setSelectedColIdx(Math.max(0, currentCols - 1));
+    }
+  }, [currentCols, selectedColIdx]);
+
+  const getColumnBorder = (colIdx: number): ColumnBorderConfig => {
+    const map =
+      columnScope === 'page'
+        ? layout.sectionColumnBorders?.[activePageIndex]
+        : layout.columnBorders;
+    const existing = map?.[colIdx];
+    if (!existing) {
+      return {
+        ...DEFAULT_COLUMN_BORDER,
+        sides: { ...DEFAULT_COLUMN_BORDER.sides },
+      };
+    }
+    return {
+      ...DEFAULT_COLUMN_BORDER,
+      ...existing,
+      sides: {
+        ...DEFAULT_COLUMN_BORDER.sides,
+        ...(existing.sides || {}),
+      },
+    };
+  };
+
+  const updateColumnBorder = (
+    colIdx: number,
+    updater: (prev: ColumnBorderConfig) => ColumnBorderConfig
+  ) => {
+    onChangeLayout((prev) => {
+      const currentMap =
+        columnScope === 'page'
+          ? { ...(prev.sectionColumnBorders?.[activePageIndex] || {}) }
+          : { ...(prev.columnBorders || {}) };
+      const baseCfg = currentMap[colIdx] || {
+        ...DEFAULT_COLUMN_BORDER,
+        sides: { ...DEFAULT_COLUMN_BORDER.sides },
+      };
+      currentMap[colIdx] = updater({
+        ...baseCfg,
+        sides: { ...baseCfg.sides },
+      });
+
+      if (columnScope === 'page') {
+        return {
+          ...prev,
+          sectionColumnBorders: {
+            ...(prev.sectionColumnBorders || {}),
+            [activePageIndex]: currentMap,
+          },
+        };
+      }
+      return {
+        ...prev,
+        columnBorders: currentMap,
+      };
+    });
+  };
+
+  const resetSingleColumnBorder = (colIdx: number) => {
+    onChangeLayout((prev) => {
+      if (columnScope === 'page') {
+        const nextPageMap = { ...(prev.sectionColumnBorders?.[activePageIndex] || {}) };
+        delete nextPageMap[colIdx];
+        return {
+          ...prev,
+          sectionColumnBorders: {
+            ...(prev.sectionColumnBorders || {}),
+            [activePageIndex]: nextPageMap,
+          },
+        };
+      }
+      const nextDocMap = { ...(prev.columnBorders || {}) };
+      delete nextDocMap[colIdx];
+      return {
+        ...prev,
+        columnBorders: nextDocMap,
+      };
+    });
+  };
+
+  const removeAllColumnBorders = () => {
+    onChangeLayout((prev) => {
+      if (columnScope === 'page') {
+        const nextSectionMap = { ...(prev.sectionColumnBorders || {}) };
+        delete nextSectionMap[activePageIndex];
+        return {
+          ...prev,
+          sectionColumnBorders: nextSectionMap,
+        };
+      }
+      return {
+        ...prev,
+        columnBorders: {},
+      };
+    });
+  };
+
+  const activeColBorder = getColumnBorder(selectedColIdx);
 
   return (
     <div className="nc-modal-backdrop no-print">
@@ -744,6 +849,267 @@ export const PageLayoutModal: React.FC<PageLayoutModalProps> = ({
                     Page {activePageIndex + 1} Only
                   </button>
                 </div>
+              </div>
+
+              {/* =================================================================
+                  INDIVIDUAL COLUMN BORDER CUSTOMIZATION (Requirements 14–18)
+              ================================================================== */}
+              <div
+                style={{
+                  padding: '14px',
+                  backgroundColor: 'var(--bg-ivory, #FBF9F5)',
+                  border: '1px solid var(--border-stone)',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: '14px',
+                }}
+              >
+                <div
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    flexWrap: 'wrap',
+                    gap: '8px',
+                  }}
+                >
+                  <div>
+                    <span
+                      style={{
+                        fontSize: '12px',
+                        fontWeight: 700,
+                        color: 'var(--ink-navy)',
+                        display: 'block',
+                      }}
+                    >
+                      Individual Column Border Controls
+                    </span>
+                    <span style={{ fontSize: '10.5px', color: 'var(--ink-muted)' }}>
+                      Select a specific column below to customize its borders independently.
+                    </span>
+                  </div>
+                  <div style={{ display: 'flex', gap: '6px' }}>
+                    <button
+                      type="button"
+                      onClick={() => resetSingleColumnBorder(selectedColIdx)}
+                      className="btn-ed-subtle"
+                      style={{ padding: '4px 8px', fontSize: '10px' }}
+                      title={`Reset Column ${selectedColIdx + 1} border settings`}
+                    >
+                      Reset Col {selectedColIdx + 1}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={removeAllColumnBorders}
+                      className="btn-ed-subtle"
+                      style={{ padding: '4px 8px', fontSize: '10px', color: 'var(--accent-terracotta)' }}
+                      title="Remove borders from all columns without changing layout or content"
+                    >
+                      Clear All Column Borders
+                    </button>
+                  </div>
+                </div>
+
+                {/* Column Selector Pills (1 .. currentCols) */}
+                <div>
+                  <label className="ed-field-label">Select Column to Style (1 of {currentCols})</label>
+                  <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+                    {Array.from({ length: currentCols }, (_, cIdx) => {
+                      const colCfg = getColumnBorder(cIdx);
+                      const isSelected = selectedColIdx === cIdx;
+                      return (
+                        <button
+                          key={cIdx}
+                          type="button"
+                          onClick={() => setSelectedColIdx(cIdx)}
+                          className={isSelected ? 'btn-ed-primary' : 'btn-ed-subtle'}
+                          style={{
+                            padding: '6px 12px',
+                            fontSize: '11px',
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: '6px',
+                          }}
+                        >
+                          <span>Column {cIdx + 1}</span>
+                          {colCfg.enabled && colCfg.style !== 'none' && (
+                            <span
+                              style={{
+                                width: '7px',
+                                height: '7px',
+                                borderRadius: '50%',
+                                backgroundColor: isSelected ? '#FFFFFF' : colCfg.color || 'var(--accent-blue)',
+                                display: 'inline-block',
+                              }}
+                              title="Borders enabled on this column"
+                            />
+                          )}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {/* Enable / Disable Border Toggle for Selected Column */}
+                <div
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    padding: '8px 10px',
+                    backgroundColor: 'var(--bg-stone)',
+                    border: '1px solid var(--border-ivory)',
+                  }}
+                >
+                  <span style={{ fontSize: '11.5px', fontWeight: 600, color: 'var(--ink-navy)' }}>
+                    Enable Borders on Column {selectedColIdx + 1}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      updateColumnBorder(selectedColIdx, (prev) => ({
+                        ...prev,
+                        enabled: !prev.enabled,
+                        style: !prev.enabled && prev.style === 'none' ? 'solid' : prev.style,
+                      }))
+                    }
+                    className={activeColBorder.enabled ? 'btn-ed-primary' : 'btn-ed-subtle'}
+                    style={{ padding: '4px 12px', fontSize: '10.5px' }}
+                  >
+                    {activeColBorder.enabled ? 'Enabled' : 'Disabled (No Border)'}
+                  </button>
+                </div>
+
+                {/* Style, Thickness, Colour & Individual Sides */}
+                {activeColBorder.enabled && (
+                  <>
+                    <div
+                      style={{
+                        display: 'grid',
+                        gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))',
+                        gap: '10px',
+                      }}
+                    >
+                      <div>
+                        <label className="ed-field-label">Col {selectedColIdx + 1} Border Style</label>
+                        <select
+                          value={activeColBorder.style}
+                          onChange={(e) => {
+                            const newStyle = e.target.value as ColumnBorderConfig['style'];
+                            updateColumnBorder(selectedColIdx, (prev) => ({
+                              ...prev,
+                              style: newStyle,
+                              enabled: newStyle !== 'none',
+                            }));
+                          }}
+                          className="ed-select"
+                        >
+                          <option value="solid">Solid</option>
+                          <option value="dashed">Dashed</option>
+                          <option value="dotted">Dotted</option>
+                          <option value="double">Double</option>
+                          <option value="none">None</option>
+                        </select>
+                      </div>
+
+                      <div>
+                        <label className="ed-field-label">Col {selectedColIdx + 1} Thickness</label>
+                        <select
+                          value={activeColBorder.widthPx}
+                          onChange={(e) => {
+                            const w = parseInt(e.target.value, 10) || 1;
+                            updateColumnBorder(selectedColIdx, (prev) => ({
+                              ...prev,
+                              widthPx: w,
+                            }));
+                          }}
+                          className="ed-select"
+                        >
+                          {[1, 2, 3, 4, 5, 6, 8].map((px) => (
+                            <option key={px} value={px}>
+                              {px} px
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+
+                      <div>
+                        <label className="ed-field-label">Col {selectedColIdx + 1} Colour</label>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                          <input
+                            type="color"
+                            value={activeColBorder.color || '#0A194E'}
+                            onChange={(e) => {
+                              const col = e.target.value;
+                              updateColumnBorder(selectedColIdx, (prev) => ({
+                                ...prev,
+                                color: col,
+                              }));
+                            }}
+                            style={{
+                              width: '32px',
+                              height: '32px',
+                              border: '1px solid var(--border-stone)',
+                              cursor: 'pointer',
+                              padding: 0,
+                            }}
+                          />
+                          <input
+                            type="text"
+                            value={activeColBorder.color || '#0A194E'}
+                            onChange={(e) => {
+                              const col = e.target.value;
+                              updateColumnBorder(selectedColIdx, (prev) => ({
+                                ...prev,
+                                color: col,
+                              }));
+                            }}
+                            className="ed-input"
+                            style={{ padding: '5px 8px', fontSize: '11px' }}
+                          />
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Individual Border Sides (Top, Bottom, Left, Right) */}
+                    <div>
+                      <label className="ed-field-label">
+                        Active Border Sides for Column {selectedColIdx + 1}
+                      </label>
+                      <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+                        {(
+                          [
+                            ['top', 'Top Border'],
+                            ['bottom', 'Bottom Border'],
+                            ['left', 'Left Border'],
+                            ['right', 'Right Border'],
+                          ] as const
+                        ).map(([sideKey, sideLabel]) => {
+                          const isSideOn = activeColBorder.sides[sideKey];
+                          return (
+                            <button
+                              key={sideKey}
+                              type="button"
+                              onClick={() =>
+                                updateColumnBorder(selectedColIdx, (prev) => ({
+                                  ...prev,
+                                  sides: {
+                                    ...prev.sides,
+                                    [sideKey]: !prev.sides[sideKey],
+                                  },
+                                }))
+                              }
+                              className={isSideOn ? 'btn-ed-primary' : 'btn-ed-subtle'}
+                              style={{ flex: 1, minWidth: '105px', padding: '6px 10px', fontSize: '10.5px' }}
+                            >
+                              {isSideOn ? `✓ ${sideLabel}` : sideLabel}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  </>
+                )}
               </div>
             </div>
           )}

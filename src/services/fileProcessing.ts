@@ -100,8 +100,8 @@ export async function readDocumentFile(file: File): Promise<string> {
         useSystemFonts: true,
       });
       const pdf = await loadingTask.promise;
-      let fullText = '';
-      const maxPages = Math.min(pdf.numPages, 35);
+      let fullText = `[Document: ${file.name} | Total Pages: ${pdf.numPages}]\n`;
+      const maxPages = Math.min(pdf.numPages, 150);
       for (let pNum = 1; pNum <= maxPages; pNum++) {
         const page = await pdf.getPage(pNum);
         const textContent = await page.getTextContent();
@@ -110,7 +110,7 @@ export async function readDocumentFile(file: File): Promise<string> {
           .join(' ')
           .replace(/\s+/g, ' ');
         if (pageStr.trim()) {
-          fullText += `\n--- Page ${pNum} ---\n${pageStr.trim()}\n`;
+          fullText += `\n--- Page ${pNum} of ${pdf.numPages} ---\n${pageStr.trim()}\n`;
         }
       }
       if (fullText.trim().length > 30) {

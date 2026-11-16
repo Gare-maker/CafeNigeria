@@ -67,6 +67,72 @@ export interface AIMessage {
   sources?: SourceReference[];
 }
 
+export interface ColumnBorderConfig {
+  enabled: boolean;
+  style: 'none' | 'solid' | 'double' | 'dashed' | 'dotted';
+  widthPx: number;
+  color: string;
+  sides: {
+    top: boolean;
+    right: boolean;
+    bottom: boolean;
+    left: boolean;
+  };
+}
+
+export const DEFAULT_COLUMN_BORDER: ColumnBorderConfig = {
+  enabled: false,
+  style: 'solid',
+  widthPx: 1,
+  color: '#0A194E',
+  sides: {
+    top: true,
+    right: true,
+    bottom: true,
+    left: true,
+  },
+};
+
+export interface TaskSpecification {
+  mode:
+    | 'create_new'
+    | 'add_additional_pages'
+    | 'expand_to_total_pages'
+    | 'edit_sections'
+    | 'ocr_extract'
+    | 'conversation';
+  requestedTotalPages?: number;
+  requestedAdditionalPages?: number;
+  targetDeltaPages: number;
+  isExplicitPageCount: boolean;
+  requestedWordCount?: number;
+  requiredSections: string[];
+  requiresTable: boolean;
+  requiresReferences: boolean;
+  topic: string;
+  originalPrompt: string;
+}
+
+export interface ValidationReport {
+  isComplete: boolean;
+  requestedPages: number;
+  renderedPages: number;
+  wordCount: number;
+  missingSections: string[];
+  hasRepetitionWarning: boolean;
+  notes: string[];
+}
+
+export interface StructuredOCRResult {
+  text: string;
+  html: string;
+  tablesCount: number;
+  documentTitle?: string;
+  confidence: 'high' | 'medium' | 'low';
+  extractedFields: { field: string; value: string; confidence?: string }[];
+  unclearSegments: string[];
+}
+
 export interface PageLayoutSettings {
   pageSize: 'A4' | 'A3' | 'A5' | 'Letter' | 'Legal' | 'Custom';
   customWidthMm?: number;
@@ -100,6 +166,8 @@ export interface PageLayoutSettings {
       frameStyle?: PageFrameStyleId;
     }
   >;
+  columnBorders?: Record<number, ColumnBorderConfig>;
+  sectionColumnBorders?: Record<number, Record<number, ColumnBorderConfig>>;
 }
 
 export const DEFAULT_PAGE_LAYOUT: PageLayoutSettings = {
@@ -125,6 +193,8 @@ export const DEFAULT_PAGE_LAYOUT: PageLayoutSettings = {
   sectionOrientations: {},
   sectionColumns: {},
   sectionBorders: {},
+  columnBorders: {},
+  sectionColumnBorders: {},
 };
 
 export const PAGE_DIMENSIONS_PX: Record<

@@ -5261,88 +5261,165 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
                   </svg>
                 )}
 
-                {/* Editable Page Content Area (zIndex: 6, transparent background) */}
-                <div
-                  ref={(el) => {
-                    pageRefs.current[pageIdx] = el;
-                  }}
-                  contentEditable
-                  suppressContentEditableWarning
-                  onFocus={() => {
-                    activePageIdxRef.current = pageIdx;
-                  }}
-                  onClick={(e) => {
-                    handlePageSelection(pageIdx, e);
-                    setSelectedDrawingId(null);
-                    setSelectedImageId(null);
-                    setIsEditingShape(false);
-                  }}
-                  onInput={() => {
-                    checkAndFlowPages(pageIdx);
-                    recordHistorySnapshotDebounced();
-                  }}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Backspace') {
-                      const sel = window.getSelection();
-                      if (
-                        sel &&
-                        sel.isCollapsed &&
-                        sel.anchorOffset === 0 &&
-                        pageIdx > 0
-                      ) {
-                        const pageEl = pageRefs.current[pageIdx];
-                        const prevPageEl = pageRefs.current[pageIdx - 1];
-                        if (
-                          pageEl &&
-                          prevPageEl &&
-                          (pageEl.innerHTML.trim() === '' ||
-                            pageEl.innerHTML === '<p><br></p>' ||
-                            pageEl.textContent?.trim() === '')
-                        ) {
-                          e.preventDefault();
-                          setPages((prev) =>
-                            prev.filter((_, i) => i !== pageIdx)
-                          );
-                          prevPageEl.focus();
-                          const range = window.document.createRange();
-                          range.selectNodeContents(prevPageEl);
-                          range.collapse(false);
-                          sel.removeAllRanges();
-                          sel.addRange(range);
-                          setHasUnsavedChanges(true);
-                          triggerAutoSave();
-                          return;
+                {/* Editable Page Content Area + Per-Column Border Overlay */}
+                {(() => {
+                  const effectiveCols =
+                    layout.sectionColumns &&
+                    layout.sectionColumns[pageIdx] !== undefined
+                      ? layout.sectionColumns[pageIdx]
+                      : layout.columns || 1;
+                  const gapPx = layout.columnGapPx || 28;
+                  const pageColBorders =
+                    (layout.sectionColumnBorders &&
+                      layout.sectionColumnBorders[pageIdx]) ||
+                    layout.columnBorders;
+                  const hasActiveColBorders =
+                    pageColBorders &&
+                    Object.entries(pageColBorders).some(([idxStr, cfg]) => {
+                      const idx = Number(idxStr);
+                      return (
+                        idx >= 0 &&
+                        idx < effectiveCols &&
+                        cfg &&
+                        cfg.enabled &&
+                        cfg.style !== 'none' &&
+                        (cfg.sides?.top ||
+                          cfg.sides?.right ||
+                          cfg.sides?.bottom ||
+                          cfg.sides?.left)
+                      );
+                    });
+
+                  return (
+                    <div style={{ position: 'relative' }}>
+                      {hasActiveColBorders && (
+                        <div
+                          aria-hidden="true"
+                          style={{
+                            position: 'absolute',
+                            inset: 0,
+                            pointerEvents: 'none',
+                            zIndex: 5,
+                            display: 'grid',
+                            gridTemplateColumns: `repeat(${effectiveCols}, minmax(0, 1fr))`,
+                            columnGap: `${gapPx}px`,
+                          }}
+                        >
+                          {Array.from({ length: effectiveCols }, (_, cIdx) => {
+                            const cfg = pageColBorders?.[cIdx];
+                            const isOn =
+                              cfg && cfg.enabled && cfg.style !== 'none';
+                            const borderRule = isOn
+                              ? `${cfg.widthPx || 1}px ${cfg.style || 'solid'} ${cfg.color || '#0A194E'}`
+                              : 'none';
+                            return (
+                              <div
+                                key={cIdx}
+                                style={{
+                                  height: '100%',
+                                  boxSizing: 'border-box',
+                                  borderTop:
+                                    isOn && cfg.sides?.top ? borderRule : 'none',
+                                  borderRight:
+                                    isOn && cfg.sides?.right
+                                      ? borderRule
+                                      : 'none',
+                                  borderBottom:
+                                    isOn && cfg.sides?.bottom
+                                      ? borderRule
+                                      : 'none',
+                                  borderLeft:
+                                    isOn && cfg.sides?.left
+                                      ? borderRule
+                                      : 'none',
+                                }}
+                              />
+                            );
+                          })}
+                        </div>
+                      )}
+
+                      {/* Editable Page Content Area (zIndex: 6, transparent background) */}
+                      <div
+                        ref={(el) => {
+                          pageRefs.current[pageIdx] = el;
+                        }}
+                        contentEditable
+                        suppressContentEditableWarning
+                        onFocus={() => {
+                          activePageIdxRef.current = pageIdx;
+                        }}
+                        onClick={(e) => {
+                          handlePageSelection(pageIdx, e);
+                          setSelectedDrawingId(null);
+                          setSelectedImageId(null);
+                          setIsEditingShape(false);
+                        }}
+                        onInput={() => {
+                          checkAndFlowPages(pageIdx);
+                          recordHistorySnapshotDebounced();
+                        }}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Backspace') {
+                            const sel = window.getSelection();
+                            if (
+                              sel &&
+                              sel.isCollapsed &&
+                              sel.anchorOffset === 0 &&
+                              pageIdx > 0
+                            ) {
+                              const pageEl = pageRefs.current[pageIdx];
+                              const prevPageEl = pageRefs.current[pageIdx - 1];
+                              if (
+                                pageEl &&
+                                prevPageEl &&
+                                (pageEl.innerHTML.trim() === '' ||
+                                  pageEl.innerHTML === '<p><br></p>' ||
+                                  pageEl.textContent?.trim() === '')
+                              ) {
+                                e.preventDefault();
+                                setPages((prev) =>
+                                  prev.filter((_, i) => i !== pageIdx)
+                                );
+                                prevPageEl.focus();
+                                const range = window.document.createRange();
+                                range.selectNodeContents(prevPageEl);
+                                range.collapse(false);
+                                sel.removeAllRanges();
+                                sel.addRange(range);
+                                setHasUnsavedChanges(true);
+                                triggerAutoSave();
+                                return;
+                              }
+                            }
+                          }
+                        }}
+                        onMouseDown={(e) =>
+                          handlePageMouseDownForTableResize(pageIdx, e)
                         }
-                      }
-                    }
-                  }}
-                  onMouseDown={(e) =>
-                    handlePageMouseDownForTableResize(pageIdx, e)
-                  }
-                  onTouchStart={(e) =>
-                    handlePageMouseDownForTableResize(pageIdx, e)
-                  }
-                  onMouseMove={(e) =>
-                    handlePageMouseMoveForTableResize(pageIdx, e)
-                  }
-                  onMouseUp={(e) => {
-                    handlePageSelection(pageIdx, e);
-                  }}
-                  onKeyUp={(e) => handlePageSelection(pageIdx, e)}
-                  className="doc-editable-body"
-                  style={{
-                    position: 'relative',
-                    zIndex: 6,
-                    background: 'transparent',
-                    lineHeight: layout.lineSpacing || lineSpacing || '1.6',
-                    columnCount:
-                      (layout.sectionColumns &&
-                        layout.sectionColumns[pageIdx] !== undefined)
-                        ? layout.sectionColumns[pageIdx]
-                        : layout.columns || 1,
-                    columnGap: `${layout.columnGapPx || 28}px`,
-                  }}
-                />
+                        onTouchStart={(e) =>
+                          handlePageMouseDownForTableResize(pageIdx, e)
+                        }
+                        onMouseMove={(e) =>
+                          handlePageMouseMoveForTableResize(pageIdx, e)
+                        }
+                        onMouseUp={(e) => {
+                          handlePageSelection(pageIdx, e);
+                        }}
+                        onKeyUp={(e) => handlePageSelection(pageIdx, e)}
+                        className="doc-editable-body"
+                        style={{
+                          position: 'relative',
+                          zIndex: 6,
+                          background: 'transparent',
+                          lineHeight: layout.lineSpacing || lineSpacing || '1.6',
+                          columnCount: effectiveCols,
+                          columnGap: `${gapPx}px`,
+                        }}
+                      />
+                    </div>
+                  );
+                })()}
 
                 {/* Layer Stacking: Foreground Shapes & Active Canvas Drawing (zIndex: 18, in front of text layer) */}
                 {(pageDrawings.some((d) => (d.zIndex ?? 10) >= 6) ||
