@@ -666,6 +666,24 @@ export const INITIAL_DOCUMENTS: DocumentItem[] = [
   },
 ];
 
+export interface GenerationFinalizationSpec {
+  title?: string;
+  documentType?: string;
+  instructions?: string;
+  targetPages?: number;
+  targetWords?: number;
+  targetSections?: number;
+  requiredHeadings?: string;
+  topicsToCover?: string;
+  includeTables?: boolean;
+  includeReferences?: boolean;
+  writingStyle?: string;
+  tone?: string;
+  detailLevel?: 'concise' | 'standard' | 'comprehensive';
+  audience?: string;
+  language?: string;
+}
+
 export interface OptionalDetailsInput {
   institution?: string;
   department?: string;
@@ -674,21 +692,24 @@ export interface OptionalDetailsInput {
   lecturer?: string;
   referencingStyle?: string;
   wordCount?: string;
+  finalization?: GenerationFinalizationSpec;
 }
 
-function extractTitleFromPrompt(
+export function extractTitleFromPrompt(
   prompt: string,
-  category: DocumentCategory
+  category: DocumentCategory = 'free-writing'
 ): string {
   const cleaned = prompt
+    .replace(/^(?:please\s+|can\s+you\s+|could\s+you\s+|you\s+just\s+|just\s+|i\s+want\s+you\s+to\s+)+/i, '')
     .replace(
-      /^(write|create|generate|prepare|build|draft|make|convert)\s+(a|an|the)?\s*(project|research project|assignment|seminar|seminar paper|cv|resume|notes|study notes)?\s*(on|about|titled|for)?\s*/i,
+      /^(?:write|create|generate|prepare|build|draft|make|convert|compose)\s+(?:a|an|the)?\s*(?:comprehensive|detailed|short|brief|long|in-depth|extensive|\d{1,2}[-\s]*pages?|\d[\d,]*[-\s]*words?)?\s*(?:project|research project|research paper|business proposal|business plan|assignment|seminar|seminar paper|report|essay|note|short note|notes|study notes|document|cv|resume)?\s*(?:on|about|titled|explaining|covering|for)?\s*(?:a|an|the)?\s*/i,
       ''
     )
+    .split(/\.\s*(?:include|including|with|make sure|ensure|avoid)/i)[0]
     .trim();
 
-  if (cleaned.length >= 6) {
-    const firstSentence = cleaned.split(/[.\n]/)[0].trim();
+  if (cleaned.length >= 4) {
+    const firstSentence = cleaned.split(/[.\n]/)[0].trim().replace(/[.,;:!?]+$/, '');
     return firstSentence.length > 90
       ? firstSentence.slice(0, 88).trim()
       : firstSentence.charAt(0).toUpperCase() + firstSentence.slice(1);
@@ -1010,7 +1031,6 @@ export function generateDocumentFromNaturalPrompt(
       <p style="font-size: 10.5pt; color: #475569; margin-bottom: 18px;">
         <em>Drafted with AI Assistance</em> &nbsp;|&nbsp; <strong>Author / Contributor:</strong> ${student} &nbsp;|&nbsp; <strong>Context:</strong> ${inst}
       </p>
-      ${prompt ? `<p style="font-style: italic; color: #334155; margin-bottom: 16px;">Instruction Scope: "${prompt}"</p>` : ''}
       ${uploadedContextBlock ? `<h2>Source &amp; Reference Material</h2>${uploadedContextBlock}` : ''}
       <h2>1. Introduction &amp; Motivation</h2>
       <p>This document presents a comprehensive examination of <strong>${title}</strong>. Synthesising core ideas, practical perspectives, and operational realities enables a nuanced understanding of current dynamics and future trajectories.</p>
@@ -1643,7 +1663,7 @@ export interface GeminiApiResponse {
 export async function callGeminiApi(
   systemInstruction: string,
   userPrompt: string,
-  modelName: string = 'gemini-1.5-flash',
+  modelName: string = 'gemini-2.5-flash',
   attachments?: AIAttachment[],
   history?: { role: 'user' | 'model'; text: string }[],
   jsonMode: boolean = false,
@@ -1733,11 +1753,19 @@ export async function callGeminiApi(
 
       if (!res.ok) {
         const errJson = await res.json().catch(() => null);
-        // If 404 model not found on gemini-1.5-flash, fallback to gemini-2.0-flash
-        if (res.status === 404 && activeModel === 'gemini-1.5-flash' && attempt < maxRetries) {
-          console.warn('Model gemini-1.5-flash returned 404, falling back to gemini-2.0-flash');
-          activeModel = 'gemini-2.0-flash';
-          continue;
+        // 404 model fallback chain: gemini-2.5-flash -> gemini-2.0-flash -> gemini-1.5-flash
+        if (res.status === 404 && attempt < maxRetries) {
+          if (activeModel === 'gemini-2.5-flash') {
+            console.warn('Model gemini-2.5-flash returned 404, falling back to gemini-2.0-flash');
+            activeModel = 'gemini-2.0-flash';
+            continue;
+          }
+          if (activeModel === 'gemini-2.0-flash' || activeModel === 'gemini-1.5-flash') {
+            const nextFallback = activeModel === 'gemini-1.5-flash' ? 'gemini-2.5-flash' : 'gemini-1.5-flash';
+            console.warn(`Model ${activeModel} returned 404, falling back to ${nextFallback}`);
+            activeModel = nextFallback;
+            continue;
+          }
         }
         const isTransient = res.status === 429 || res.status === 503 || res.status >= 500;
         if (isTransient && attempt < maxRetries) {
@@ -1899,9 +1927,23 @@ export function parseTaskSpecification(prompt: string, existingPageCount: number
     }
   }
 
-  // Extract requested word count (e.g. "1,500-word", "3000 words")
+  // Extract requested word count (e.g. "1,500-word", "3000 words", "at least 3,000 words")
   const wordCountMatch = prompt.match(/\b(\d{1,2}(?:,\d{3})+|\d{3,5})\s*(?:-| )?words?\b/i);
   const requestedWordCount = wordCountMatch ? parseInt(wordCountMatch[1].replace(/,/g, ''), 10) : undefined;
+
+  // Extract requested chapter/section count (e.g. "10 chapters", "10 clearly defined sections")
+  const sectionCountMatch = prompt.match(
+    new RegExp(`\\b${numPattern}\\s+(?:clearly\\s+defined\\s+)?(?:chapters?|sections?)\\b`, 'i')
+  );
+  const requestedSectionCount = sectionCountMatch ? parseNumberOrWord(sectionCountMatch[1]) || undefined : undefined;
+
+  if (!isExplicitPageCount) {
+    if (requestedWordCount && requestedWordCount >= 800) {
+      targetDeltaPages = Math.min(35, Math.max(3, Math.ceil(requestedWordCount / 320)));
+    } else if (requestedSectionCount && requestedSectionCount >= 3) {
+      targetDeltaPages = Math.min(35, requestedSectionCount);
+    }
+  }
 
   // Extract required sections from phrases like "including an introduction, literature review, methodology, findings, conclusion and references"
   const requiredSections: string[] = [];
@@ -3867,103 +3909,156 @@ export async function generateDocumentFromNaturalPromptAsync(
   const refStyle = optional.referencingStyle || 'APA 7th Edition';
   const wordCount = optional.wordCount || 'Comprehensive multi-page academic document';
 
-  const taskSpec = parseTaskSpecification(prompt, 0);
-  const isMultiPage = Boolean(
+  const fin = optional.finalization;
+  const effectivePrompt = [
+    fin?.instructions?.trim() || prompt,
+    fin?.title ? `Document Title: ${fin.title}` : '',
+    fin?.documentType ? `Document Type: ${fin.documentType}` : '',
+    fin?.targetPages ? `Target Length: ${fin.targetPages} pages` : '',
+    fin?.targetWords ? `Target Word Count: approximately ${fin.targetWords} words` : '',
+    fin?.targetSections ? `Required Structure: ${fin.targetSections} chapters/sections` : '',
+    fin?.requiredHeadings ? `Required Headings/Sections: ${fin.requiredHeadings}` : '',
+    fin?.topicsToCover ? `Topics to Cover: ${fin.topicsToCover}` : '',
+    fin?.includeTables ? 'Include structured analytical/data HTML tables where appropriate.' : '',
+    fin?.includeReferences ? `Include formal references/citations in ${refStyle} style.` : '',
+    fin?.writingStyle ? `Writing Style: ${fin.writingStyle}` : '',
+    fin?.tone ? `Tone: ${fin.tone}` : '',
+    fin?.detailLevel ? `Detail Level: ${fin.detailLevel}` : '',
+    fin?.audience ? `Target Audience: ${fin.audience}` : '',
+    fin?.language ? `Language: ${fin.language}` : '',
+  ]
+    .filter(Boolean)
+    .join('\n');
+
+  const taskSpec = parseTaskSpecification(effectivePrompt, 0);
+  const hasExplicitMultiTarget = Boolean(
     taskSpec.isExplicitPageCount ||
-    /comprehensive|dissertation|thesis|research project|chapters|in-depth|extensive|12-page|10-page/i.test(prompt)
+      (fin?.targetPages && fin.targetPages >= 2) ||
+      (fin?.targetWords && fin.targetWords >= 800) ||
+      (fin?.targetSections && fin.targetSections >= 3) ||
+      (taskSpec.requestedWordCount && taskSpec.requestedWordCount >= 800) ||
+      /comprehensive|dissertation|thesis|research project|chapters|in-depth|extensive|12-page|10-page/i.test(
+        effectivePrompt
+      )
   );
 
-  // Use the Sequential Multi-Section Generator for all explicit page count & comprehensive requests
-  if (isMultiPage) {
+  // Use the Sequential Multi-Section Generator for all multi-page, multi-section, or high word-count requests
+  if (hasExplicitMultiTarget) {
     const multi = await generateMultiSectionDocumentAsync(
       category,
-      prompt,
+      effectivePrompt,
       attachments,
-      optional,
+      {
+        ...optional,
+        existingTitle: fin?.title?.trim() || undefined,
+      },
       onProgress
     );
     return {
-      title: multi.title,
+      title: fin?.title?.trim() || multi.title,
       content: multi.content,
       metadata: multi.metadata,
     };
   }
 
-  if (apiKey) {
-    try {
-      const systemInstruction = `
+  if (!apiKey) {
+    throw new Error(
+      'Gemini API key is not configured. Please add your Gemini API key in Settings or .env.local so the AI can generate real document content.'
+    );
+  }
+
+  onProgress?.('Preparing document and generating content with Gemini AI...');
+
+  const systemInstruction = `
 You are the CafeNigeria AI Document Generator.
-TASK: Generate a complete, authoritative, comprehensive professional document tailored specifically to the user's prompt and academic details.
+TASK: Generate a complete, substantive, publication-ready document executing the user's instructions.
+CRITICAL RULES:
+1. NEVER copy, echo, or repeat the user's prompt or "Instruction Scope" inside the document title or body. Write the ACTUAL document content (e.g. if asked "you just write a short note on dark matter", write an actual authoritative note titled "Dark Matter", NOT "You just write a short note on dark matter").
+2. Follow all specified length, structure, style, tone, audience, and formatting preferences.
+3. Return ONLY valid JSON matching this schema:
+{
+  "title": "Clean, professional document title (never a raw command)",
+  "content": "Complete clean HTML document body with <h1>, <h2>, <p>, <ul>/<ol>, and <table> elements as needed",
+  "summary": "Brief 1-sentence summary of the generated document"
+}
 DOCUMENT SPECIFICATIONS:
-- Category: ${category}
+- Title Hint: ${fin?.title || extractTitleFromPrompt(prompt, category)}
+- Document Type: ${fin?.documentType || category}
 - Institution: ${inst}
 - Department: ${dept}
 - Course Code: ${courseCode}
 - Student / Author: ${student}
 - Lecturer / Supervisor: ${lecturer}
 - Referencing Style: ${refStyle}
-- Target Length: ${wordCount}
-
-REQUIREMENTS:
-1. Provide substantive, exhaustive, multi-section content (Title, Abstract/Executive Summary, Chapters/Sections, Empirical/Analytical Tables, Discussion, References).
-2. For multi-page structures, separate pages using: <hr class="page-break" /> so the editor paginates properly.
-3. Return ONLY valid JSON matching this schema:
-{
-  "title": "Clear concise document title",
-  "content": "Full complete clean HTML document body with headings, paragraphs, and tables",
-  "summary": "Brief summary of the generated document"
-}
+- Target Length: ${fin?.targetWords ? `${fin.targetWords} words` : wordCount}
 `.trim();
 
-      const refBlock =
-        attachments.length > 0
-          ? `\n\nATTACHED REFERENCE MATERIALS:\n` +
-            attachments.map((a) => `[File: ${a.name}]:\n${a.extractedText}`).join('\n\n')
-          : '';
+  const refBlock =
+    attachments.length > 0
+      ? `\n\nATTACHED REFERENCE MATERIALS:\n` +
+        attachments.map((a) => `[File: ${a.name}]:\n${a.extractedText}`).join('\n\n')
+      : '';
 
-      const userPrompt = `
-PROMPT:
-${prompt}
+  const userPrompt = `
+GENERATION PARAMETERS (execute these — do NOT repeat them as prose):
+${effectivePrompt}
 ${refBlock}
 `.trim();
 
-      const response = await callGeminiApi(
-        systemInstruction,
-        userPrompt,
-        'gemini-1.5-flash',
-        attachments,
-        undefined,
-        true
-      );
+  const response = await callGeminiApi(
+    systemInstruction,
+    userPrompt,
+    'gemini-2.5-flash',
+    attachments,
+    undefined,
+    true
+  );
 
-      if (response && response.text) {
-        const parsed = safeParseJson<any>(response.text);
-        if (parsed && parsed.content && parsed.content.length > 50) {
-          return {
-            title: parsed.title || extractTitleFromPrompt(prompt, category),
-            content: parsed.content,
-            metadata: {
-              institution: inst,
-              department: dept,
-              courseCode: courseCode,
-              studentName: student,
-              lecturerOrSupervisor: lecturer,
-              referencingStyle: refStyle,
-              wordCountTarget: wordCount,
-              fontFamily: 'Times New Roman',
-              showPageNumbers: true,
-              layout: DEFAULT_PAGE_LAYOUT,
-            },
-          };
-        }
-      }
-    } catch (err) {
-      console.warn('Gemini doc generation failed, falling back to local template:', err);
-    }
+  if (!response || response.error || !response.text) {
+    throw new Error(
+      response?.error
+        ? `Gemini API error: ${response.error}`
+        : 'Gemini API did not return any document content. Please verify your API key and try again.'
+    );
   }
 
-  const refPayload = attachments.map((a) => ({ name: a.name, extractedText: a.extractedText || '' }));
-  return generateDocumentFromNaturalPrompt(category, prompt, refPayload, optional);
+  const parsed = safeParseJson<any>(response.text);
+  let finalHtml =
+    parsed && parsed.content && parsed.content.length > 50
+      ? parsed.content
+      : response.text.replace(/^```(?:json|html)?\s*/i, '').replace(/```\s*$/i, '').trim();
+
+  if (!/<(h[1-6]|p|ul|ol|table|div)\b/i.test(finalHtml)) {
+    finalHtml = convertMarkdownOrTextToHtml(finalHtml);
+  }
+
+  if (!finalHtml || finalHtml.replace(/<[^>]+>/g, '').trim().length < 25) {
+    throw new Error(
+      'Generated document content was empty or invalid. Please verify your Gemini API key and try again.'
+    );
+  }
+
+  const resolvedTitle =
+    fin?.title?.trim() ||
+    parsed?.title?.trim() ||
+    extractTitleFromPrompt(prompt, category);
+
+  return {
+    title: resolvedTitle,
+    content: finalHtml,
+    metadata: {
+      institution: inst,
+      department: dept,
+      courseCode: courseCode,
+      studentName: student,
+      lecturerOrSupervisor: lecturer,
+      referencingStyle: refStyle,
+      wordCountTarget: wordCount,
+      fontFamily: 'Times New Roman',
+      showPageNumbers: true,
+      layout: DEFAULT_PAGE_LAYOUT,
+    },
+  };
 }
 
 /**

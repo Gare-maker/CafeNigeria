@@ -5650,7 +5650,7 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
                   }}
                 />
                 <span style={{ fontWeight: 500, color: 'var(--ink-rich)' }}>
-                  {Boolean(getGeminiApiKey()) ? 'Gemini 1.5 Flash Connected' : 'Local Offline AI Fallback'}
+                  {Boolean(getGeminiApiKey()) ? 'Gemini AI Connected' : 'API Key Required'}
                 </span>
               </div>
               {!Boolean(getGeminiApiKey()) && onNavigateSettings && (

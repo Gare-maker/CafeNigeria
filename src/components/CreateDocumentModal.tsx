@@ -35,6 +35,9 @@ import {
   modifyExistingDocumentWithAI,
   modifyExistingDocumentWithAIAsync,
   generateDocumentFromImagesAI,
+  extractTitleFromPrompt,
+  parseTaskSpecification,
+  GenerationFinalizationSpec,
 } from '../services/aiGenerator';
 import { openDocumentFromComputerFile } from '../services/exportService';
 import { processMultipleFiles } from '../services/fileProcessing';
@@ -108,6 +111,25 @@ export const CreateDocumentModal: React.FC<CreateDocumentModalProps> = ({
   const [referencingStyle, setReferencingStyle] = useState('APA 7th Edition');
   const [wordCount, setWordCount] = useState('');
   const [isGenerating, setIsGenerating] = useState(false);
+  const [generationStep, setGenerationStep] = useState<'prompt' | 'finalize'>('prompt');
+  const [generationError, setGenerationError] = useState<string | null>(null);
+
+  // Document Generation Finalization Interface State (Section 3)
+  const [finTitle, setFinTitle] = useState('');
+  const [finDocType, setFinDocType] = useState('General Document');
+  const [finInstructions, setFinInstructions] = useState('');
+  const [finTargetPages, setFinTargetPages] = useState('');
+  const [finTargetWords, setFinTargetWords] = useState('');
+  const [finTargetSections, setFinTargetSections] = useState('');
+  const [finRequiredHeadings, setFinRequiredHeadings] = useState('');
+  const [finTopicsToCover, setFinTopicsToCover] = useState('');
+  const [finIncludeTables, setFinIncludeTables] = useState(true);
+  const [finIncludeReferences, setFinIncludeReferences] = useState(true);
+  const [finWritingStyle, setFinWritingStyle] = useState('Academic & Analytical');
+  const [finTone, setFinTone] = useState('Formal & Objective');
+  const [finDetailLevel, setFinDetailLevel] = useState<'concise' | 'standard' | 'comprehensive'>('comprehensive');
+  const [finAudience, setFinAudience] = useState('Academic & Professional Readers');
+  const [finLanguage, setFinLanguage] = useState('English');
 
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const recognitionRef = useRef<any>(null);
@@ -313,9 +335,61 @@ export const CreateDocumentModal: React.FC<CreateDocumentModalProps> = ({
     }
   };
 
+  const handleOpenFinalization = () => {
+    if (isRecording) stopVoiceRecording();
+    const combinedPrompt = [prompt.trim(), interimTranscript.trim()]
+      .filter(Boolean)
+      .join(' ');
+    const effectivePrompt =
+      combinedPrompt ||
+      (uploadedFiles.length > 0
+        ? `Incorporate reference material from ${uploadedFiles[0].name}`
+        : '');
+    if (!effectivePrompt) return;
+
+    const spec = parseTaskSpecification(effectivePrompt, 0);
+    const inferredTitle = extractTitleFromPrompt(effectivePrompt, category);
+    const inferredType =
+      /business proposal/i.test(effectivePrompt)
+        ? 'Business Proposal'
+        : /business plan/i.test(effectivePrompt)
+        ? 'Business Plan'
+        : /research paper/i.test(effectivePrompt)
+        ? 'Research Paper'
+        : /technical/i.test(effectivePrompt)
+        ? 'Technical Documentation'
+        : /meeting/i.test(effectivePrompt)
+        ? 'Meeting Report'
+        : /essay/i.test(effectivePrompt)
+        ? 'Essay'
+        : category === 'assignments'
+        ? 'Academic Assignment'
+        : category === 'projects'
+        ? 'Project Report'
+        : category === 'seminars'
+        ? 'Research Paper'
+        : 'General Document';
+
+    setFinTitle(inferredTitle);
+    setFinDocType(inferredType);
+    setFinInstructions(effectivePrompt);
+    setFinTargetPages(spec.isExplicitPageCount ? String(spec.targetDeltaPages) : '');
+    setFinTargetWords(spec.requestedWordCount ? String(spec.requestedWordCount) : wordCount.trim());
+    const secMatch = effectivePrompt.match(/\b(\d{1,2})\s+(?:clearly\s+defined\s+)?(?:chapters?|sections?)\b/i);
+    setFinTargetSections(secMatch ? secMatch[1] : '');
+    setFinRequiredHeadings(spec.requiredSections.join(', '));
+    setFinTopicsToCover('');
+    setFinIncludeTables(spec.requiresTable || /table|data|financial|projection|comparison/i.test(effectivePrompt));
+    setFinIncludeReferences(spec.requiresReferences || category === 'projects' || category === 'seminars');
+    setGenerationError(null);
+    setGenerationStep('finalize');
+  };
+
   // Section 7 Option A: Create with AI (Supports Multimodal Image-to-Doc and Reference-Aware Generation)
   const handleGenerate = async () => {
+    if (isGenerating) return;
     if (isRecording) stopVoiceRecording();
+    setGenerationError(null);
     const combinedPrompt = [prompt.trim(), interimTranscript.trim()]
       .filter(Boolean)
       .join(' ');
@@ -443,9 +517,33 @@ export const CreateDocumentModal: React.FC<CreateDocumentModalProps> = ({
         }
 
         // New Document with AI (Multi-section sequential generation with live progress reporting)
+        const parsedPagesNum = parseInt(finTargetPages, 10);
+        const parsedWordsNum = parseInt(finTargetWords.replace(/,/g, ''), 10);
+        const parsedSectionsNum = parseInt(finTargetSections, 10);
+        const finalizationSpec: GenerationFinalizationSpec | undefined =
+          generationStep === 'finalize'
+            ? {
+                title: finTitle.trim() || undefined,
+                documentType: finDocType,
+                instructions: finInstructions.trim() || effectivePrompt,
+                targetPages: !isNaN(parsedPagesNum) && parsedPagesNum > 0 ? parsedPagesNum : undefined,
+                targetWords: !isNaN(parsedWordsNum) && parsedWordsNum > 0 ? parsedWordsNum : undefined,
+                targetSections: !isNaN(parsedSectionsNum) && parsedSectionsNum > 0 ? parsedSectionsNum : undefined,
+                requiredHeadings: finRequiredHeadings.trim() || undefined,
+                topicsToCover: finTopicsToCover.trim() || undefined,
+                includeTables: finIncludeTables,
+                includeReferences: finIncludeReferences,
+                writingStyle: finWritingStyle,
+                tone: finTone,
+                detailLevel: finDetailLevel,
+                audience: finAudience.trim() || undefined,
+                language: finLanguage.trim() || 'English',
+              }
+            : undefined;
+
         const generated = await generateDocumentFromNaturalPromptAsync(
           category,
-          effectivePrompt,
+          finalizationSpec?.instructions || effectivePrompt,
           uploadedFiles,
           {
             institution: institution.trim() || undefined,
@@ -454,7 +552,8 @@ export const CreateDocumentModal: React.FC<CreateDocumentModalProps> = ({
             studentName: studentName.trim() || undefined,
             lecturer: lecturer.trim() || undefined,
             referencingStyle,
-            wordCount: wordCount.trim() || undefined,
+            wordCount: finTargetWords.trim() || wordCount.trim() || undefined,
+            finalization: finalizationSpec,
           },
           (status) => setExtractionStatus(status)
         );
@@ -482,10 +581,13 @@ export const CreateDocumentModal: React.FC<CreateDocumentModalProps> = ({
         setIsGenerating(false);
         setExtractionStatus('');
         onDocumentCreated(newDoc, false);
-      } catch (err) {
+      } catch (err: any) {
         console.error('Document AI generation error:', err);
         setIsGenerating(false);
         setExtractionStatus('');
+        setGenerationError(
+          err?.message || 'Document generation failed. Please check your Gemini API key in Settings and try again.'
+        );
       }
     }, 200);
   };
@@ -1412,15 +1514,283 @@ export const CreateDocumentModal: React.FC<CreateDocumentModalProps> = ({
                   <button
                     type="button"
                     disabled={isGenerating || (!prompt.trim() && uploadedFiles.length === 0)}
-                    onClick={handleGenerate}
+                    onClick={handleOpenFinalization}
                     className="btn-ed-primary"
                     style={{ padding: '6px 14px', fontSize: '11.5px', gap: '6px' }}
                   >
                     <Send size={12} />
-                    <span>{isGenerating ? 'Generating...' : 'Generate with AI'}</span>
+                    <span>{isGenerating ? 'Generating...' : 'Review & Generate'}</span>
                   </button>
                 </div>
               </div>
+
+              {/* Section 3: Document Generation Finalization Interface */}
+              {generationStep === 'finalize' && (
+                <div
+                  style={{
+                    border: '1px solid var(--accent-blue)',
+                    backgroundColor: 'var(--bg-ivory)',
+                    padding: '16px',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: '12px',
+                  }}
+                >
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px' }}>
+                    <div>
+                      <span style={{ fontSize: '13px', fontWeight: 700, color: 'var(--ink-navy)', display: 'block' }}>
+                        Document Generation Finalization
+                      </span>
+                      <span style={{ fontSize: '11px', color: 'var(--ink-muted)' }}>
+                        Review and refine your document parameters before generating actual content.
+                      </span>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setGenerationStep('prompt')}
+                      className="btn-ed-subtle"
+                      style={{ fontSize: '11px', padding: '4px 10px' }}
+                      disabled={isGenerating}
+                    >
+                      Back to Prompt
+                    </button>
+                  </div>
+
+                  {/* A & B: Title & Document Type */}
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(210px, 1fr))', gap: '10px' }}>
+                    <div>
+                      <label className="ed-field-label">Document Title</label>
+                      <input
+                        type="text"
+                        value={finTitle}
+                        onChange={(e) => setFinTitle(e.target.value)}
+                        placeholder="e.g. Student Accommodation Business Proposal"
+                        className="ed-input"
+                      />
+                    </div>
+                    <div>
+                      <label className="ed-field-label">Document Type</label>
+                      <select
+                        value={finDocType}
+                        onChange={(e) => setFinDocType(e.target.value)}
+                        className="ed-select"
+                      >
+                        <option value="Research Paper">Research Paper</option>
+                        <option value="Business Proposal">Business Proposal</option>
+                        <option value="Business Plan">Business Plan</option>
+                        <option value="Academic Assignment">Academic Assignment</option>
+                        <option value="Project Report">Project Report</option>
+                        <option value="Technical Documentation">Technical Documentation</option>
+                        <option value="Meeting Report">Meeting Report</option>
+                        <option value="Essay">Essay</option>
+                        <option value="General Document">General Document</option>
+                      </select>
+                    </div>
+                  </div>
+
+                  {/* C: Editable Document Instructions */}
+                  <div>
+                    <label className="ed-field-label">Document Instructions (Executed as Parameters, Never Inserted as Body Text)</label>
+                    <textarea
+                      value={finInstructions}
+                      onChange={(e) => setFinInstructions(e.target.value)}
+                      rows={3}
+                      className="ed-input"
+                      style={{ width: '100%', resize: 'vertical', fontSize: '12px' }}
+                    />
+                  </div>
+
+                  {/* D: Length Requirements */}
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: '10px' }}>
+                    <div>
+                      <label className="ed-field-label">Target Pages</label>
+                      <input
+                        type="number"
+                        min={1}
+                        max={40}
+                        value={finTargetPages}
+                        onChange={(e) => setFinTargetPages(e.target.value)}
+                        placeholder="e.g. 12"
+                        className="ed-input"
+                      />
+                    </div>
+                    <div>
+                      <label className="ed-field-label">Target Words</label>
+                      <input
+                        type="number"
+                        min={100}
+                        step={100}
+                        value={finTargetWords}
+                        onChange={(e) => setFinTargetWords(e.target.value)}
+                        placeholder="e.g. 3000"
+                        className="ed-input"
+                      />
+                    </div>
+                    <div>
+                      <label className="ed-field-label">Chapters / Sections</label>
+                      <input
+                        type="number"
+                        min={1}
+                        max={30}
+                        value={finTargetSections}
+                        onChange={(e) => setFinTargetSections(e.target.value)}
+                        placeholder="e.g. 10"
+                        className="ed-input"
+                      />
+                    </div>
+                  </div>
+
+                  {/* E: Structure & Content */}
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(210px, 1fr))', gap: '10px' }}>
+                    <div>
+                      <label className="ed-field-label">Required Headings / Sections</label>
+                      <input
+                        type="text"
+                        value={finRequiredHeadings}
+                        onChange={(e) => setFinRequiredHeadings(e.target.value)}
+                        placeholder="e.g. Executive Summary, Market Analysis, Conclusion"
+                        className="ed-input"
+                      />
+                    </div>
+                    <div>
+                      <label className="ed-field-label">Topics, Examples & Supporting Material</label>
+                      <input
+                        type="text"
+                        value={finTopicsToCover}
+                        onChange={(e) => setFinTopicsToCover(e.target.value)}
+                        placeholder="e.g. Case studies, empirical metrics, risks"
+                        className="ed-input"
+                      />
+                    </div>
+                  </div>
+
+                  <div style={{ display: 'flex', gap: '16px', flexWrap: 'wrap', fontSize: '12px', color: 'var(--ink-navy)' }}>
+                    <label style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', cursor: 'pointer' }}>
+                      <input
+                        type="checkbox"
+                        checked={finIncludeTables}
+                        onChange={(e) => setFinIncludeTables(e.target.checked)}
+                      />
+                      <span>Include Structured Tables</span>
+                    </label>
+                    <label style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', cursor: 'pointer' }}>
+                      <input
+                        type="checkbox"
+                        checked={finIncludeReferences}
+                        onChange={(e) => setFinIncludeReferences(e.target.checked)}
+                      />
+                      <span>Include References & Citations</span>
+                    </label>
+                  </div>
+
+                  {/* F: Writing Preferences */}
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: '10px' }}>
+                    <div>
+                      <label className="ed-field-label">Writing Style</label>
+                      <input
+                        type="text"
+                        value={finWritingStyle}
+                        onChange={(e) => setFinWritingStyle(e.target.value)}
+                        className="ed-input"
+                      />
+                    </div>
+                    <div>
+                      <label className="ed-field-label">Tone</label>
+                      <input
+                        type="text"
+                        value={finTone}
+                        onChange={(e) => setFinTone(e.target.value)}
+                        className="ed-input"
+                      />
+                    </div>
+                    <div>
+                      <label className="ed-field-label">Detail Level</label>
+                      <select
+                        value={finDetailLevel}
+                        onChange={(e) => setFinDetailLevel(e.target.value as 'concise' | 'standard' | 'comprehensive')}
+                        className="ed-select"
+                      >
+                        <option value="concise">Concise</option>
+                        <option value="standard">Standard</option>
+                        <option value="comprehensive">Comprehensive</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label className="ed-field-label">Target Audience</label>
+                      <input
+                        type="text"
+                        value={finAudience}
+                        onChange={(e) => setFinAudience(e.target.value)}
+                        className="ed-input"
+                      />
+                    </div>
+                    <div>
+                      <label className="ed-field-label">Language</label>
+                      <input
+                        type="text"
+                        value={finLanguage}
+                        onChange={(e) => setFinLanguage(e.target.value)}
+                        className="ed-input"
+                      />
+                    </div>
+                  </div>
+
+                  {generationError && (
+                    <div
+                      style={{
+                        padding: '10px 14px',
+                        backgroundColor: '#FEF2F2',
+                        border: '1px solid #FECACA',
+                        fontSize: '12px',
+                        color: '#B91C1C',
+                        display: 'flex',
+                        alignItems: 'flex-start',
+                        gap: '8px',
+                      }}
+                    >
+                      <AlertCircle size={15} style={{ flexShrink: 0, marginTop: '2px' }} />
+                      <span>{generationError}</span>
+                    </div>
+                  )}
+
+                  {isGenerating && extractionStatus && (
+                    <div
+                      style={{
+                        padding: '10px 14px',
+                        backgroundColor: 'rgba(20, 71, 230, 0.06)',
+                        border: '1px solid rgba(20, 71, 230, 0.25)',
+                        fontSize: '12px',
+                        color: 'var(--ink-navy)',
+                      }}
+                    >
+                      {extractionStatus}
+                    </div>
+                  )}
+
+                  {/* G: Prominent Generate Document Button */}
+                  <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px', marginTop: '4px' }}>
+                    <button
+                      type="button"
+                      onClick={() => setGenerationStep('prompt')}
+                      className="btn-ed-subtle"
+                      disabled={isGenerating}
+                      style={{ padding: '9px 14px', fontSize: '12px' }}
+                    >
+                      Cancel / Edit Prompt
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleGenerate}
+                      disabled={isGenerating}
+                      className="btn-ed-primary"
+                      style={{ padding: '9px 18px', fontSize: '12.5px', fontWeight: 700, gap: '6px' }}
+                    >
+                      <Sparkles size={14} />
+                      <span>{isGenerating ? 'Generating Document...' : 'Generate Document'}</span>
+                    </button>
+                  </div>
+                </div>
+              )}
 
               {/* Workspace Doc Selection Popover (Section 5) */}
               {showWorkspaceDocPicker && (
