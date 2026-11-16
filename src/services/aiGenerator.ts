@@ -1,4 +1,4 @@
-import {
+﻿import {
   AIAttachment,
   CategoryMeta,
   DocumentCategory,
@@ -163,7 +163,7 @@ export function searchDocumentMatch(
     doc.metadata.lecturerOrSupervisor,
   ]
     .filter(Boolean)
-    .join(' • ');
+    .join(' â€¢ ');
 
   if (metaFields.toLowerCase().includes(q)) {
     return {
@@ -367,7 +367,7 @@ export const INITIAL_DOCUMENTS: DocumentItem[] = [
       academicSession: '2025/2026',
       referencingStyle: 'APA 7th Edition',
       headerText: 'IMPACT OF SOCIAL MEDIA ON ACADEMIC PERFORMANCE',
-      footerText: 'Department of Mass Communication — UNIBEN',
+      footerText: 'Department of Mass Communication â€” UNIBEN',
       showPageNumbers: true,
       orientation: 'portrait',
       marginSize: 'normal',
@@ -436,7 +436,7 @@ export const INITIAL_DOCUMENTS: DocumentItem[] = [
   {
     id: 'doc-asg-01',
     title:
-      'Monetary Policy Instruments and Inflation Control in Nigeria (2018–2026)',
+      'Monetary Policy Instruments and Inflation Control in Nigeria (2018â€“2026)',
     category: 'assignments',
     createdAt: '06 November 2026',
     updatedAt: '07 November 2026',
@@ -460,7 +460,7 @@ export const INITIAL_DOCUMENTS: DocumentItem[] = [
     },
     content: `
       <div style="margin-bottom: 20px;">
-        <p style="margin: 0; font-weight: 700; font-size: 13pt;">UNIVERSITY OF LAGOS — DEPARTMENT OF ECONOMICS</p>
+        <p style="margin: 0; font-weight: 700; font-size: 13pt;">UNIVERSITY OF LAGOS â€” DEPARTMENT OF ECONOMICS</p>
         <p style="margin: 4px 0 0 0; font-size: 11pt;"><strong>Course:</strong> ECN 312 (Macroeconomic Theory II) &nbsp;|&nbsp; <strong>Student:</strong> Adebayo Tobi Samuel (210903044) &nbsp;|&nbsp; <strong>Lecturer:</strong> Prof. M. A. Adebiyi</p>
       </div>
       <h1>MONETARY POLICY INSTRUMENTS AND INFLATION CONTROL IN NIGERIA</h1>
@@ -501,7 +501,7 @@ export const INITIAL_DOCUMENTS: DocumentItem[] = [
       </table>
       <h2>4. Conclusion &amp; References</h2>
       <p>Effective disinflation in Nigeria requires tighter coordination between orthodox monetary tightening by the CBN and structural fiscal interventions addressing domestic agricultural output and transport infrastructure.</p>
-      <p><strong>References (APA 7th):</strong><br/>Central Bank of Nigeria. (2025). <em>Monetary Policy Communiqués and Statistical Bulletin</em>. Abuja: CBN Press.<br/>Nwosa, P. I., &amp; Ajibola, A. (2024). Monetary policy transmission and structural inflation in West Africa. <em>Nigerian Journal of Economic Studies</em>, 66(2), 112–129.</p>
+      <p><strong>References (APA 7th):</strong><br/>Central Bank of Nigeria. (2025). <em>Monetary Policy CommuniquÃ©s and Statistical Bulletin</em>. Abuja: CBN Press.<br/>Nwosa, P. I., &amp; Ajibola, A. (2024). Monetary policy transmission and structural inflation in West Africa. <em>Nigerian Journal of Economic Studies</em>, 66(2), 112â€“129.</p>
     `,
     aiHistory: [],
   },
@@ -518,7 +518,7 @@ export const INITIAL_DOCUMENTS: DocumentItem[] = [
     metadata: {
       institution: 'Ahmadu Bello University (ABU), Zaria',
       department: 'Electrical & Computer Engineering',
-      course: 'ENG 504 — Senior Undergraduate Seminar',
+      course: 'ENG 504 â€” Senior Undergraduate Seminar',
       studentName: 'Ibrahim Yusuf Danjuma',
       matricNumber: 'U20EE1082',
       lecturerOrSupervisor: 'Engr. Dr. S. B. Mohammed',
@@ -530,11 +530,11 @@ export const INITIAL_DOCUMENTS: DocumentItem[] = [
     },
     content: `
       <h1>RENEWABLE ENERGY MICROGRIDS FOR RURAL HEALTHCARE ELECTRIFICATION IN NIGERIA</h1>
-      <p><strong>Author:</strong> Ibrahim Yusuf Danjuma (U20EE1082) — Department of Electrical &amp; Computer Engineering, ABU Zaria<br/><strong>Supervisor:</strong> Engr. Dr. S. B. Mohammed</p>
+      <p><strong>Author:</strong> Ibrahim Yusuf Danjuma (U20EE1082) â€” Department of Electrical &amp; Computer Engineering, ABU Zaria<br/><strong>Supervisor:</strong> Engr. Dr. S. B. Mohammed</p>
       <h2>Abstract</h2>
       <p>Primary Healthcare Centres (PHCs) across rural Nigeria require uninterrupted electrical power for vaccine cold-chain storage, diagnostic equipment, and emergency nocturnal maternity care. This seminar paper evaluates hybrid Solar Photovoltaic (PV) and Lithium-Iron-Phosphate (LiFePO4) battery microgrids as a cost-effective alternative to diesel generators.</p>
       <h2>1. Introduction &amp; Background</h2>
-      <p>Over 40% of rural health facilities operate with fewer than six hours of grid electricity daily. Hybrid solar microgrids capitalize on Nigeria's high solar irradiance (4.5 to 6.5 kWh/m²/day) to deliver 99.5% uptime with lower levelized cost of electricity (LCOE).</p>
+      <p>Over 40% of rural health facilities operate with fewer than six hours of grid electricity daily. Hybrid solar microgrids capitalize on Nigeria's high solar irradiance (4.5 to 6.5 kWh/mÂ²/day) to deliver 99.5% uptime with lower levelized cost of electricity (LCOE).</p>
       <h2>2. System Architecture &amp; Sizing</h2>
       <ul>
         <li><strong>PV Array Layer:</strong> Monocrystalline half-cut modules sized at 15 kWp per Primary Healthcare Centre.</li>
@@ -568,22 +568,22 @@ export const INITIAL_DOCUMENTS: DocumentItem[] = [
     content: `
       <div style="margin-bottom: 18px;">
         <h1 style="margin: 0; font-size: 20pt; letter-spacing: -0.02em;">OSAHON EGHOSA VICTOR</h1>
-        <p style="margin: 6px 0 0 0; font-size: 10.5pt; color: #334155;">Benin City / Lagos, Nigeria &nbsp;•&nbsp; +234 813 402 9188 &nbsp;•&nbsp; osahon.eghosa@email.com &nbsp;•&nbsp; linkedin.com/in/osahoneghosa</p>
+        <p style="margin: 6px 0 0 0; font-size: 10.5pt; color: #334155;">Benin City / Lagos, Nigeria &nbsp;â€¢&nbsp; +234 813 402 9188 &nbsp;â€¢&nbsp; osahon.eghosa@email.com &nbsp;â€¢&nbsp; linkedin.com/in/osahoneghosa</p>
       </div>
       <h2>PROFESSIONAL SUMMARY</h2>
       <p>First-Class Computer Science graduate and Data &amp; Operations Analyst with hands-on experience in financial reconciliation, SQL reporting, and workflow automation across Nigerian fintech and educational institutions. Proven track record of reducing reporting turnaround time from 5 days to 3 hours.</p>
       <h2>WORK EXPERIENCE</h2>
-      <p><strong>Graduate Data &amp; Operations Analyst (NYSC)</strong> — Nigerian Cafe Systems Ltd, Benin City <em>(2025 – Present)</em></p>
+      <p><strong>Graduate Data &amp; Operations Analyst (NYSC)</strong> â€” Nigerian Cafe Systems Ltd, Benin City <em>(2025 â€“ Present)</em></p>
       <ul>
         <li>Automated termly broadsheet and fee reconciliation pipelines for 12+ partner centres serving 5,000+ users.</li>
         <li>Designed interactive SQL and Excel dashboards tracking collection rates (achieving 87% on-time reconciliation).</li>
       </ul>
-      <p><strong>Software Engineering Intern (SIWES)</strong> — Interswitch Group, Lagos <em>(2024)</em></p>
+      <p><strong>Software Engineering Intern (SIWES)</strong> â€” Interswitch Group, Lagos <em>(2024)</em></p>
       <ul>
         <li>Built internal transaction monitoring scripts that flagged settlement anomalies across payment channels.</li>
       </ul>
       <h2>EDUCATION</h2>
-      <p><strong>B.Sc. (Hons) Computer Science — First Class (4.78 / 5.00)</strong><br/>Covenant University, Ota, Ogun State <em>(2020 – 2024)</em></p>
+      <p><strong>B.Sc. (Hons) Computer Science â€” First Class (4.78 / 5.00)</strong><br/>Covenant University, Ota, Ogun State <em>(2020 â€“ 2024)</em></p>
       <h2>CORE SKILLS &amp; CERTIFICATIONS</h2>
       <p><strong>Technical:</strong> SQL, Python, Advanced Microsoft Excel, Power BI, Financial Modelling, Technical Documentation.<br/><strong>Certifications:</strong> Google Data Analytics Professional Certificate (2025), Microsoft Certified: Power BI Data Analyst Associate.</p>
     `,
@@ -592,7 +592,7 @@ export const INITIAL_DOCUMENTS: DocumentItem[] = [
   {
     id: 'doc-notes-01',
     title:
-      'BIO 201 Cell Signalling & Membrane Transport — Extracted Lecture Notes',
+      'BIO 201 Cell Signalling & Membrane Transport â€” Extracted Lecture Notes',
     category: 'image-to-notes',
     createdAt: '07 November 2026',
     updatedAt: '07 November 2026',
@@ -601,7 +601,7 @@ export const INITIAL_DOCUMENTS: DocumentItem[] = [
     format: 'DOCX',
     metadata: {
       institution: 'Obafemi Awolowo University (OAU), Ile-Ife',
-      course: 'BIO 201 — Cell Biology & Genetics',
+      course: 'BIO 201 â€” Cell Biology & Genetics',
       studentName: 'Nwosu Chidinma',
       showPageNumbers: true,
       orientation: 'portrait',
@@ -610,16 +610,16 @@ export const INITIAL_DOCUMENTS: DocumentItem[] = [
     },
     content: `
       <h1>BIO 201: CELL SIGNALLING &amp; MEMBRANE TRANSPORT (ORGANISED NOTES)</h1>
-      <p><em>Source: 3 Handwritten Whiteboard &amp; Notebook Images — Cleaned &amp; Structured by AI</em></p>
+      <p><em>Source: 3 Handwritten Whiteboard &amp; Notebook Images â€” Cleaned &amp; Structured by AI</em></p>
       <h2>1. Mechanisms of Plasma Membrane Transport</h2>
       <ul>
         <li><strong>Passive Transport (No ATP required):</strong> Movement of solutes down their electrochemical concentration gradient (Simple Diffusion, Facilitated Diffusion via channel and carrier proteins, and Osmosis).</li>
-        <li><strong>Active Transport (ATP required):</strong> Movement of ions or molecules against their concentration gradient. Primary example: <strong>Sodium-Potassium Pump (Na⁺/K⁺-ATPase)</strong> which exports 3 Na⁺ ions and imports 2 K⁺ ions per ATP hydrolysed.</li>
+        <li><strong>Active Transport (ATP required):</strong> Movement of ions or molecules against their concentration gradient. Primary example: <strong>Sodium-Potassium Pump (Naâº/Kâº-ATPase)</strong> which exports 3 Naâº ions and imports 2 Kâº ions per ATP hydrolysed.</li>
       </ul>
       <h2>2. Stages of Cellular Signal Transduction</h2>
       <ol>
         <li><strong>Reception:</strong> Extracellular signalling molecule (ligand) binds specifically to a membrane-bound receptor (e.g., G-Protein Coupled Receptor or Receptor Tyrosine Kinase).</li>
-        <li><strong>Transduction:</strong> Conformational change triggers a second-messenger cascade (cAMP, IP₃, Ca²⁺) amplifying the original signal.</li>
+        <li><strong>Transduction:</strong> Conformational change triggers a second-messenger cascade (cAMP, IPâ‚ƒ, CaÂ²âº) amplifying the original signal.</li>
         <li><strong>Response:</strong> Activation of transcription factors or cytosolic enzymes altering cellular metabolism or gene expression.</li>
       </ol>
       <h2>3. Quick Revision Questions (Generated from Notes)</h2>
@@ -800,7 +800,7 @@ export function generateDocumentFromNaturalPrompt(
       <h1>CHAPTER THREE: RESEARCH METHODOLOGY</h1>
       <h2>3.1 Research Design &amp; References (${refStyle})</h2>
       <p>A descriptive survey research design was employed with a sample size of 350 respondents selected via Taro Yamane's (1967) formula at a 5% margin of error.</p>
-      <p><strong>References:</strong><br/>Adeyemi, T. O. (2025). Institutional resource allocation and performance metrics in Nigeria. <em>Journal of Management &amp; Policy Research</em>, 19(2), 101–119.<br/>Okonkwo, C. N., &amp; Ibrahim, M. S. (2024). Empirical assessment of operational frameworks in Nigerian tertiary institutions. <em>African Research Review</em>, 18(4), 55–73.</p>
+      <p><strong>References:</strong><br/>Adeyemi, T. O. (2025). Institutional resource allocation and performance metrics in Nigeria. <em>Journal of Management &amp; Policy Research</em>, 19(2), 101â€“119.<br/>Okonkwo, C. N., &amp; Ibrahim, M. S. (2024). Empirical assessment of operational frameworks in Nigerian tertiary institutions. <em>African Research Review</em>, 18(4), 55â€“73.</p>
     `.trim();
 
     const pagesArr = [page1, page2, page3];
@@ -847,7 +847,7 @@ export function generateDocumentFromNaturalPrompt(
   if (category === 'assignments') {
     const content = `
       <div style="margin-bottom: 20px;">
-        <p style="margin: 0; font-size: 13pt; font-weight: 700; text-transform: uppercase;">${inst} — ${dept}</p>
+        <p style="margin: 0; font-size: 13pt; font-weight: 700; text-transform: uppercase;">${inst} â€” ${dept}</p>
         <p style="margin: 4px 0 0 0; font-size: 10.5pt;"><strong>Course Code:</strong> ${courseCode} &nbsp;|&nbsp; <strong>Student:</strong> ${student} &nbsp;|&nbsp; <strong>Lecturer:</strong> ${lecturer}</p>
       </div>
       <h1>${title.toUpperCase()}</h1>
@@ -889,7 +889,7 @@ export function generateDocumentFromNaturalPrompt(
       </table>
       <h2>4. Conclusion &amp; References (${refStyle})</h2>
       <p>In conclusion, addressing <strong>${title}</strong> requires coordinated policy execution, capacity development, and empirical monitoring.</p>
-      <p><strong>References:</strong><br/>Adebayo, K. O., &amp; Nwankwo, C. E. (2025). Contemporary perspectives and empirical analysis of ${title.toLowerCase()}. <em>West African Journal of Academic Research</em>, 18(3), 44–62.<br/>Usman, A. B., &amp; Eze, D. N. (2026). Institutional frameworks and policy outcomes in Nigerian tertiary systems. <em>Journal of Applied Social &amp; Management Sciences</em>, 12(1), 89–107.</p>
+      <p><strong>References:</strong><br/>Adebayo, K. O., &amp; Nwankwo, C. E. (2025). Contemporary perspectives and empirical analysis of ${title.toLowerCase()}. <em>West African Journal of Academic Research</em>, 18(3), 44â€“62.<br/>Usman, A. B., &amp; Eze, D. N. (2026). Institutional frameworks and policy outcomes in Nigerian tertiary systems. <em>Journal of Applied Social &amp; Management Sciences</em>, 12(1), 89â€“107.</p>
     `;
     return {
       title,
@@ -938,7 +938,7 @@ export function generateDocumentFromNaturalPrompt(
         <li>Strengthen collaborative research between university departments and industry operators.</li>
         <li>Prioritize continuous technical training and infrastructure maintenance.</li>
       </ol>
-      <p><strong>References:</strong><br/>Eze, C. U., &amp; Bello, H. A. (2025). Emerging paradigms in ${title.toLowerCase()}. <em>Nigerian Journal of Contemporary Research</em>, 14(2), 33–49.</p>
+      <p><strong>References:</strong><br/>Eze, C. U., &amp; Bello, H. A. (2025). Emerging paradigms in ${title.toLowerCase()}. <em>Nigerian Journal of Contemporary Research</em>, 14(2), 33â€“49.</p>
     `;
     return {
       title,
@@ -962,25 +962,25 @@ export function generateDocumentFromNaturalPrompt(
     const content = `
       <div style="margin-bottom: 18px;">
         <h1 style="margin: 0; font-size: 20pt; letter-spacing: -0.02em;">${candidateName.toUpperCase()}</h1>
-        <p style="margin: 6px 0 0 0; font-size: 10.5pt; color: #334155;">Lagos / Benin City, Nigeria &nbsp;•&nbsp; +234 800 000 0000 &nbsp;•&nbsp; candidate@email.com &nbsp;•&nbsp; linkedin.com/in/candidate</p>
+        <p style="margin: 6px 0 0 0; font-size: 10.5pt; color: #334155;">Lagos / Benin City, Nigeria &nbsp;â€¢&nbsp; +234 800 000 0000 &nbsp;â€¢&nbsp; candidate@email.com &nbsp;â€¢&nbsp; linkedin.com/in/candidate</p>
       </div>
       <h2>PROFESSIONAL SUMMARY</h2>
       <p>Results-driven professional tailored to your instructions (<em>"${prompt}"</em>). Combines strong analytical execution, stakeholder communication, and technical problem-solving across fast-paced Nigerian corporate and academic settings.</p>
       ${uploadedContextBlock ? `<h2>EXTRACTED PROFILE HIGHLIGHTS</h2>${uploadedContextBlock}` : ''}
       <h2>WORK EXPERIENCE</h2>
-      <p><strong>Operations &amp; Research Analyst</strong> — Prime Corporate &amp; Research Solutions, Lagos <em>(2024 – Present)</em></p>
+      <p><strong>Operations &amp; Research Analyst</strong> â€” Prime Corporate &amp; Research Solutions, Lagos <em>(2024 â€“ Present)</em></p>
       <ul>
         <li>Spearheaded end-to-end preparation of analytical reports, project schedules, and client deliverables with 99% accuracy.</li>
         <li>Streamlined internal documentation and reporting workflows, reducing turnaround time by 45%.</li>
       </ul>
-      <p><strong>Graduate Intern</strong> — Zenith Enterprise Systems <em>(2023 – 2024)</em></p>
+      <p><strong>Graduate Intern</strong> â€” Zenith Enterprise Systems <em>(2023 â€“ 2024)</em></p>
       <ul>
         <li>Supported cross-functional project execution, data reconciliation, and executive presentation preparation.</li>
       </ul>
       <h2>EDUCATION</h2>
-      <p><strong>Bachelor of Science (B.Sc.) Honours</strong> — ${dept}<br/>${inst} <em>(2019 – 2023)</em></p>
+      <p><strong>Bachelor of Science (B.Sc.) Honours</strong> â€” ${dept}<br/>${inst} <em>(2019 â€“ 2023)</em></p>
       <h2>CORE SKILLS &amp; CERTIFICATIONS</h2>
-      <p><strong>Core Competencies:</strong> Data &amp; Policy Analysis • Project Coordination • Technical Report Writing • Microsoft Office &amp; AI Productivity Suite • Stakeholder Management</p>
+      <p><strong>Core Competencies:</strong> Data &amp; Policy Analysis â€¢ Project Coordination â€¢ Technical Report Writing â€¢ Microsoft Office &amp; AI Productivity Suite â€¢ Stakeholder Management</p>
       <h2>REFEREES</h2>
       <p>Available upon request.</p>
     `;
@@ -1271,27 +1271,27 @@ export function runPageLevelAI(
           <tbody>
             <tr>
               <td><strong>Solar PV + LiFePO4 Storage</strong></td>
-              <td>24.5% (4.5–6.5 kWh/m²/day)</td>
+              <td>24.5% (4.5â€“6.5 kWh/mÂ²/day)</td>
               <td>$0.14 / kWh</td>
-              <td>High — 99.5% uptime &amp; zero fuel logistics</td>
+              <td>High â€” 99.5% uptime &amp; zero fuel logistics</td>
             </tr>
             <tr>
               <td><strong>Small Hydro Microgrid</strong></td>
               <td>52.0% (Seasonal river flow)</td>
               <td>$0.11 / kWh</td>
-              <td>Moderate — Site-constrained to riverine zones</td>
+              <td>Moderate â€” Site-constrained to riverine zones</td>
             </tr>
             <tr>
               <td><strong>Wind Hybrid System</strong></td>
               <td>18.2% (Northern corridor)</td>
               <td>$0.19 / kWh</td>
-              <td>Selective — Best in coastal &amp; plateau belts</td>
+              <td>Selective â€” Best in coastal &amp; plateau belts</td>
             </tr>
             <tr>
               <td><strong>Diesel Generator (Baseline)</strong></td>
               <td>Variable (Fuel dependent)</td>
               <td>$0.48 / kWh</td>
-              <td>Low — High fuel cost &amp; carbon emissions</td>
+              <td>Low â€” High fuel cost &amp; carbon emissions</td>
             </tr>
           </tbody>
         </table>
@@ -1355,7 +1355,7 @@ export function runPageLevelAI(
           <text x="510" y="72" text-anchor="middle" fill="#065F46" font-size="12" font-weight="bold" font-family="sans-serif">3. Verified Output</text>
           <text x="510" y="92" text-anchor="middle" fill="#047857" font-size="10" font-family="sans-serif">99.5% Reliability Target</text>
         </svg>
-        <p style="margin: 8px 0 0 0; font-size: 9.5pt; color: #475569; font-style: italic;">Figure ${pageIndex + 1}.1: Architectural Illustration — ${docTitle}</p>
+        <p style="margin: 8px 0 0 0; font-size: 9.5pt; color: #475569; font-style: italic;">Figure ${pageIndex + 1}.1: Architectural Illustration â€” ${docTitle}</p>
       </div>
     `;
     return {
@@ -1419,7 +1419,7 @@ export function runPageLevelAI(
     return {
       updatedPageHtml: `
         <div style="border-left: 3px solid #0A194E; padding-left: 14px; margin-bottom: 16px;">
-          <p style="margin: 0; font-size: 9.5pt; text-transform: uppercase; letter-spacing: 0.08em; color: #1447E6; font-weight: 700;">Structured Executive Section — Page ${pageIndex + 1}</p>
+          <p style="margin: 0; font-size: 9.5pt; text-transform: uppercase; letter-spacing: 0.08em; color: #1447E6; font-weight: 700;">Structured Executive Section â€” Page ${pageIndex + 1}</p>
         </div>
         ${currentPageHtml}
         <div style="margin-top: 16px; padding: 12px 16px; background-color: #F8FAFC; border: 1px solid #E2E8F0;">
@@ -1660,6 +1660,21 @@ export interface GeminiApiResponse {
   };
 }
 
+const RETIRED_MODELS = new Set([
+  'gemini-1.5-flash',
+  'gemini-1.5-flash-latest',
+  'gemini-1.5-pro',
+  'gemini-1.5-pro-latest',
+  'gemini-2.0-flash',
+  'gemini-2.0-flash-exp',
+]);
+
+const GEMINI_MODEL_FALLBACK_CHAIN = [
+  'gemini-2.5-flash',
+  'gemini-3.0-flash',
+  'gemini-2.5-pro',
+];
+
 export async function callGeminiApi(
   systemInstruction: string,
   userPrompt: string,
@@ -1672,7 +1687,8 @@ export async function callGeminiApi(
   const apiKey = getGeminiApiKey();
   if (!apiKey) return null;
 
-  let activeModel = modelName;
+  let activeModel = RETIRED_MODELS.has(modelName) ? 'gemini-2.5-flash' : modelName;
+  const triedModels = new Set<string>();
 
   const contents: any[] = [];
 
@@ -1733,9 +1749,10 @@ export async function callGeminiApi(
     generationConfig,
   };
 
-  // Safe retry loop with exponential backoff & Retry-After header support
-  const maxRetries = 2;
+  // Safe retry loop with exponential backoff, model fallback chain & Retry-After header support
+  const maxRetries = 3;
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    triedModels.add(activeModel);
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${activeModel}:generateContent?key=${apiKey}`;
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
@@ -1753,17 +1770,16 @@ export async function callGeminiApi(
 
       if (!res.ok) {
         const errJson = await res.json().catch(() => null);
-        // 404 model fallback chain: gemini-2.5-flash -> gemini-2.0-flash -> gemini-1.5-flash
-        if (res.status === 404 && attempt < maxRetries) {
-          if (activeModel === 'gemini-2.5-flash') {
-            console.warn('Model gemini-2.5-flash returned 404, falling back to gemini-2.0-flash');
-            activeModel = 'gemini-2.0-flash';
-            continue;
-          }
-          if (activeModel === 'gemini-2.0-flash' || activeModel === 'gemini-1.5-flash') {
-            const nextFallback = activeModel === 'gemini-1.5-flash' ? 'gemini-2.5-flash' : 'gemini-1.5-flash';
-            console.warn(`Model ${activeModel} returned 404, falling back to ${nextFallback}`);
-            activeModel = nextFallback;
+        const rawErrMsg = errJson?.error?.message || `API error ${res.status}: ${res.statusText}`;
+        const isModelUnavailable =
+          res.status === 404 ||
+          (res.status === 400 && /no longer available|not found|not supported|deprecated/i.test(rawErrMsg));
+
+        if (isModelUnavailable && attempt < maxRetries) {
+          const nextModel = GEMINI_MODEL_FALLBACK_CHAIN.find((m) => !triedModels.has(m));
+          if (nextModel) {
+            console.warn(`Model ${activeModel} unavailable (${res.status}), falling back to ${nextModel}`);
+            activeModel = nextModel;
             continue;
           }
         }
@@ -1777,7 +1793,6 @@ export async function callGeminiApi(
           continue;
         }
         // Scrub any API key from error text before returning
-        const rawErrMsg = errJson?.error?.message || `API error ${res.status}: ${res.statusText}`;
         const safeErrMsg = rawErrMsg.replace(/AIza[0-9A-Za-z\-_]{10,}/g, '[REDACTED_KEY]');
         console.warn('Gemini API call failed with status:', res.status, safeErrMsg);
         return {
@@ -2424,7 +2439,7 @@ export function runWorkspaceAIPrompt(
   if (groupingAction) {
     billingManager.reserveAndDeductCredits(
       'AI Page Grouping Analysis',
-      'gemini-1.5-flash',
+      'gemini-2.5-flash',
       120,
       180,
       doc.title
@@ -2440,7 +2455,7 @@ export function runWorkspaceAIPrompt(
   // Deduct credits for AI text processing
   billingManager.reserveAndDeductCredits(
     'Workspace AI Prompt',
-    'gemini-1.5-flash',
+    'gemini-2.5-flash',
     350,
     620,
     doc.title
@@ -2486,7 +2501,7 @@ export function runWorkspaceAIPrompt(
             </thead>
             <tbody>
               <tr><td>Phase 1</td><td>Baseline Audit &amp; Data Collation</td><td>Month 1</td><td>99% Complete</td></tr>
-              <tr><td>Phase 2</td><td>Field Execution &amp; Testing</td><td>Month 2–3</td><td>Verified Valid</td></tr>
+              <tr><td>Phase 2</td><td>Field Execution &amp; Testing</td><td>Month 2â€“3</td><td>Verified Valid</td></tr>
               <tr><td>Phase 3</td><td>Final Verification &amp; Rollout</td><td>Month 4</td><td>100% Certified</td></tr>
             </tbody>
           </table>
@@ -2540,7 +2555,7 @@ export function runWorkspaceAIPrompt(
         <h2>References &amp; Academic Bibliography</h2>
         <p>1. Adeyemi, K. O., &amp; Babatunde, S. A. (2024). <em>Sustainable Frameworks and Implementation Strategies in Contemporary Nigeria</em>. University of Lagos Press.</p>
         <p>2. Federal Ministry of Education Nigeria (2023). <em>National Academic Policy &amp; Research Standards Guidelines</em>. Abuja: FME Publications.</p>
-        <p>3. Okafor, C. E., &amp; Musa, H. (2025). Empirical analysis of institutional resource optimization in higher education. <em>West African Journal of Applied Sciences</em>, 18(2), 114–129.</p>
+        <p>3. Okafor, C. E., &amp; Musa, H. (2025). Empirical analysis of institutional resource optimization in higher education. <em>West African Journal of Applied Sciences</em>, 18(2), 114â€“129.</p>
         <p>4. World Bank Group (2024). <em>Nigeria Development Update: Sustaining Economic and Educational Reforms</em>. Washington, D.C.: World Bank.</p>
       `;
       pageSummary = 'Added a new References & Academic Bibliography page at the bottom of the document.';
@@ -2676,7 +2691,7 @@ export function runWorkspaceAIPrompt(
     matchedGroup = pageGroups.find((g) => {
       const gLower = g.name.toLowerCase();
       if (p.includes(gLower)) return true;
-      const tokens = gLower.split(/[:\-–]/).map((t) => t.trim());
+      const tokens = gLower.split(/[:\-â€“]/).map((t) => t.trim());
       return tokens.some((tok) => tok.length > 3 && p.includes(tok));
     });
   }
@@ -2827,7 +2842,7 @@ export async function extractTextFromImageAI(
   }
 
   const continuityNote = previousPageTail
-    ? `\nContinuity context (last lines from previous page — do NOT repeat this text, continue seamlessly from where it ends):\n"${previousPageTail}"\n`
+    ? `\nContinuity context (last lines from previous page â€” do NOT repeat this text, continue seamlessly from where it ends):\n"${previousPageTail}"\n`
     : '';
 
   const userPrompt = `
@@ -3168,7 +3183,7 @@ export async function generateMultiSectionDocumentAsync(
     );
 
     const existingSummary = isExpansion
-      ? `\nEXISTING DOCUMENT CONTEXT (${existingPages.length} pages already written — DO NOT repeat these; plan ${targetSections} NEW continuation sections starting at Section ${startSectionOffset + 1}):\n` +
+      ? `\nEXISTING DOCUMENT CONTEXT (${existingPages.length} pages already written â€” DO NOT repeat these; plan ${targetSections} NEW continuation sections starting at Section ${startSectionOffset + 1}):\n` +
         existingPages
           .slice(-3)
           .map((p, idx) => `[Existing Page ${existingPages.length - 2 + idx}]: ${p.replace(/<[^>]+>/g, ' ').slice(0, 220)}`)
@@ -3208,7 +3223,7 @@ Return ONLY valid JSON matching this schema:
       const outlineRes = await callGeminiApi(
         outlineSystemInstruction,
         `User Prompt:\n${prompt}${existingSummary}${refBlock}`,
-        'gemini-1.5-flash',
+        'gemini-2.5-flash',
         attachments,
         undefined,
         true,
@@ -3292,14 +3307,14 @@ Output clean HTML for this page now:
         const secRes = await callGeminiApi(
           sectionSystem,
           secPrompt,
-          'gemini-1.5-flash',
+          'gemini-2.5-flash',
           attachments,
           undefined,
           false,
           60000
         );
 
-        if (secRes?.error && (secRes.statusCode === 401 || secRes.statusCode === 403)) {
+        if (secRes?.error) {
           throw new Error(secRes.error);
         }
 
@@ -3313,7 +3328,7 @@ Output clean HTML for this page now:
             const contRes = await callGeminiApi(
               sectionSystem,
               `Continue and complete Section ${secNum} ("${sec.sectionTitle}") seamlessly from where it stopped below WITHOUT repeating earlier paragraphs:\n\n...${tailSnippet}`,
-              'gemini-1.5-flash',
+              'gemini-2.5-flash',
               undefined,
               undefined,
               false,
@@ -3335,11 +3350,15 @@ Output clean HTML for this page now:
           }
         }
       } catch (err: any) {
-        if (err?.message && /API key|unauthorized|permission|401|403/i.test(err.message)) {
+        if (err?.message) {
           throw err;
         }
-        console.warn(`Section ${secNum} API generation failed, using non-repetitive structured synthesis:`, err);
+        console.warn(`Section ${secNum} API generation failed:`, err);
       }
+    } else {
+      throw new Error(
+        'Gemini API key is not configured. Please add your Gemini API key in Settings or .env.local to generate multi-page documents.'
+      );
     }
 
     // Distinct, non-repetitive section synthesis (used when offline or if an individual section call fails)
@@ -3349,7 +3368,7 @@ Output clean HTML for this page now:
         ? `<h3>References (${refStyle})</h3>
            <ul>
              <li>Adebayo, T., &amp; Okafor, C. (2024). <em>Institutional Frameworks and Sectoral Dynamics in Developing Economies</em>. Lagos University Press.</li>
-             <li>Nwachukwu, E. (2023). Empirical perspectives on ${taskSpec.topic.toLowerCase()}. <em>Journal of African Policy &amp; Development</em>, 18(3), 112–134.</li>
+             <li>Nwachukwu, E. (2023). Empirical perspectives on ${taskSpec.topic.toLowerCase()}. <em>Journal of African Policy &amp; Development</em>, 18(3), 112â€“134.</li>
              <li>World Bank &amp; African Development Group. (2025). <em>Regional Analytical Report: Metrics, Governance, and Sustainability</em>. Washington, DC.</li>
            </ul>`
         : '';
@@ -3371,7 +3390,7 @@ Output clean HTML for this page now:
         </thead>
         <tbody>
           <tr>
-            <td style="border: 1px solid #E2E8F0; padding: 8px 12px;">${sec.sectionTitle} — Primary Index</td>
+            <td style="border: 1px solid #E2E8F0; padding: 8px 12px;">${sec.sectionTitle} â€” Primary Index</td>
             <td style="border: 1px solid #E2E8F0; padding: 8px 12px;">${50 + ((secNum * 3) % 25)}.2 pts</td>
             <td style="border: 1px solid #E2E8F0; padding: 8px 12px;">+${11 + ((secNum * 4) % 19)}.${secNum % 9}% Variance</td>
             <td style="border: 1px solid #E2E8F0; padding: 8px 12px;">Statistically significant correlation (p &lt; 0.0${(secNum % 4) + 1})</td>
@@ -3415,7 +3434,7 @@ Output clean HTML for this page now:
 
   billingManager.reserveAndDeductCredits(
     `Sequential ${paginatedNewPages.length}-Page Generation`,
-    'gemini-1.5-flash',
+    'gemini-2.5-flash',
     Math.max(100, Math.ceil(prompt.length / 4)),
     paginatedNewPages.length * 600,
     documentTitle
@@ -3669,7 +3688,7 @@ ${prompt}
       const response = await callGeminiApi(
         systemInstruction,
         userContent,
-        'gemini-1.5-flash',
+        'gemini-2.5-flash',
         attachments,
         conversationHistory,
         true
@@ -3716,7 +3735,7 @@ ${prompt}
 
           billingManager.reserveAndDeductCredits(
             'Gemini 1.5 Flash Workspace Generation',
-            'gemini-1.5-flash',
+            'gemini-2.5-flash',
             Math.ceil(prompt.length / 4) + 120,
             680,
             doc.title
@@ -3804,7 +3823,7 @@ USER INSTRUCTION:
       const response = await callGeminiApi(
         systemInstruction,
         userPrompt,
-        'gemini-1.5-flash',
+        'gemini-2.5-flash',
         attachments
       );
 
@@ -3868,7 +3887,7 @@ ${instruction}
       const response = await callGeminiApi(
         systemInstruction,
         userPrompt,
-        'gemini-1.5-flash',
+        'gemini-2.5-flash',
         attachments
       );
 
@@ -4000,7 +4019,7 @@ DOCUMENT SPECIFICATIONS:
       : '';
 
   const userPrompt = `
-GENERATION PARAMETERS (execute these — do NOT repeat them as prose):
+GENERATION PARAMETERS (execute these â€” do NOT repeat them as prose):
 ${effectivePrompt}
 ${refBlock}
 `.trim();
@@ -4104,7 +4123,7 @@ ${refBlock}
       const response = await callGeminiApi(
         systemInstruction,
         userPrompt,
-        'gemini-1.5-flash',
+        'gemini-2.5-flash',
         attachments,
         undefined,
         true
@@ -4235,7 +4254,7 @@ export function generateDocumentVariantWithAI(
 
   billingManager.reserveAndDeductCredits(
     'AI Duplicate Variant Adaptation',
-    'gemini-1.5-flash',
+    'gemini-2.5-flash',
     250,
     380,
     variantTitle
@@ -4289,7 +4308,7 @@ export function compareDocumentsWithAI(
 
   billingManager.reserveAndDeductCredits(
     'Document Comparison & Similarity Analysis',
-    'gemini-1.5-pro',
+    'gemini-2.5-flash',
     800,
     650,
     `${docA.title} vs ${docB.title}`
