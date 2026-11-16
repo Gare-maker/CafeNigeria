@@ -131,6 +131,8 @@ export interface StructuredOCRResult {
   confidence: 'high' | 'medium' | 'low';
   extractedFields: { field: string; value: string; confidence?: string }[];
   unclearSegments: string[];
+  error?: string;
+  isComplete?: boolean;
 }
 
 export interface PageLayoutSettings {

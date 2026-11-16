@@ -2707,100 +2707,314 @@ export function runWorkspaceAIPrompt(
  * Extracts printed and handwritten text, headings, numbered/bulleted lists,
  * relational tables, key-value fields, confidence levels, and flags unclear segments.
  */
+export const IMAGE_TO_TEXT_SYSTEM_INSTRUCTION = `
+You are an accurate image-to-text extraction assistant.
+
+Your task is to extract all readable text from the image provided by the user.
+
+Transcribe the actual text visible in the image.
+
+Do not summarise the image.
+
+Do not explain what the image contains.
+
+Do not provide instructions on how to extract the text.
+
+Do not rewrite, paraphrase or simplify the original content unless explicitly requested.
+
+Preserve the original wording, sentence order, headings, paragraphs, numbering, bullet points and section structure wherever possible.
+
+Where tables are present, reconstruct them as structured tables.
+
+Where headings and subheadings are present, preserve their hierarchy.
+
+Where numbered lists are present, retain their numbering.
+
+Where text is unclear or unreadable, indicate the uncertain portion instead of inventing missing words.
+
+Do not omit text simply because the image is lengthy.
+
+If multiple images are uploaded, process them in the correct order and preserve continuity between pages.
+
+Return the extracted content in a format that can be inserted directly into a rich-text document editor.
+
+Your output must contain the extracted document content, not a conversational explanation.
+`.trim();
+
+function htmlToPlainText(html: string): string {
+  return html
+    .replace(/<\/(p|div|h[1-6]|li|tr)>/gi, '\n')
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/[ \t]+/g, ' ')
+    .replace(/\n\s*\n+/g, '\n\n')
+    .trim();
+}
+
 export async function extractTextFromImageAI(
   attachment: AIAttachment,
-  customInstruction?: string
+  customInstruction?: string,
+  previousPageTail?: string
 ): Promise<StructuredOCRResult> {
   const apiKey = getGeminiApiKey();
-  if (!apiKey || !attachment.dataUrl) {
-    const fallbackText = attachment.extractedText || `Text extracted from image ${attachment.name}`;
+  if (!apiKey) {
     return {
-      text: fallbackText,
-      html: `<p>${fallbackText}</p>`,
+      text: '',
+      html: '',
       tablesCount: 0,
       documentTitle: attachment.name.replace(/\.[^/.]+$/, ''),
-      confidence: 'medium',
+      confidence: 'low',
       extractedFields: [],
       unclearSegments: [],
+      isComplete: false,
+      error: `Gemini API key is not configured. Add your API key in Settings or .env.local to extract text from "${attachment.name}".`,
+    };
+  }
+  if (!attachment.dataUrl || !attachment.dataUrl.includes(';base64,')) {
+    return {
+      text: '',
+      html: '',
+      tablesCount: 0,
+      documentTitle: attachment.name.replace(/\.[^/.]+$/, ''),
+      confidence: 'low',
+      extractedFields: [],
+      unclearSegments: [],
+      isComplete: false,
+      error: `Image "${attachment.name}" has missing or invalid image data. Please upload the image again.`,
     };
   }
 
-  const systemInstruction = `
-You are an expert Document Vision, OCR & Structured Information Extraction Engine.
-TASK: Extract all readable text and structured fields from the provided document image with maximum fidelity.
-DIRECTIVES:
-1. Extract ALL printed text and legible handwritten text in natural reading order.
-2. Preserve original wording, numbers, dates, identifiers, references, and punctuation exactly.
-3. Preserve layout structure: identify Headings (H1, H2, H3), paragraphs, bullet points, and numbered lists.
-4. If the image contains a table or matrix, reconstruct it as a complete HTML <table> element with <thead>, <tbody>, <th>, and <td>.
-5. NEVER invent missing information: if any word or number is smudged, blurry, rotated, or illegible, mark it explicitly as [Unclear: probable text].
-6. Return ONLY valid JSON matching this schema:
-{
-  "documentTitle": "Detected title of the document or image",
-  "confidence": "high" | "medium" | "low",
-  "markdownText": "Complete extracted text and markdown tables/lists in reading order",
-  "htmlContent": "Complete clean HTML representation (<h1..h3>, <p>, <ul>, <ol>, <table>)",
-  "extractedFields": [
-    { "field": "Field/Label Name (e.g. Date, Invoice No, Author, Total)", "value": "Extracted Value", "confidence": "high" }
-  ],
-  "unclearSegments": ["Any segment marked as [Unclear: ...]"]
-}
-`.trim();
+  const continuityNote = previousPageTail
+    ? `\nContinuity context (last lines from previous page — do NOT repeat this text, continue seamlessly from where it ends):\n"${previousPageTail}"\n`
+    : '';
 
   const userPrompt = `
 Image Name: ${attachment.name}
-${customInstruction ? `User Request: ${customInstruction}` : 'Extract all text, headings, lists, structured fields, and tables contained in this image with highest precision.'}
+${continuityNote}
+${customInstruction ? `User Guidance: ${customInstruction}` : 'Extract all visible text, headings, paragraphs, numbered/bulleted lists, and tables in clean HTML (<h1>, <h2>, <h3>, <p>, <ul>, <ol>, <li>, <strong>, <em>, <table><thead><tbody><tr><th><td>). Return ONLY the extracted HTML content.'}
 `.trim();
 
   try {
-    const res = await callGeminiApi(systemInstruction, userPrompt, 'gemini-1.5-flash', [attachment], undefined, true, 65000);
-    if (res && res.text) {
-      const parsed = safeParseJson<any>(res.text);
-      if (parsed && (parsed.markdownText || parsed.htmlContent)) {
-        const rawText = (parsed.markdownText || parsed.htmlContent || '').trim();
-        const html = parsed.htmlContent
-          ? parsed.htmlContent.replace(/^```html\s*/i, '').replace(/```\s*$/i, '').trim()
-          : convertMarkdownOrTextToHtml(rawText);
-        const tablesCount = (html.match(/<table/gi) || []).length;
-        const unclearMatches = rawText.match(/\[Unclear:[^\]]+\]/gi) || [];
-        return {
-          text: rawText,
-          html,
-          tablesCount,
-          documentTitle: parsed.documentTitle || attachment.name.replace(/\.[^/.]+$/, ''),
-          confidence: parsed.confidence || (unclearMatches.length > 2 ? 'low' : 'high'),
-          extractedFields: Array.isArray(parsed.extractedFields) ? parsed.extractedFields : [],
-          unclearSegments: Array.isArray(parsed.unclearSegments) ? parsed.unclearSegments : unclearMatches,
-        };
-      }
+    let res = await callGeminiApi(
+      IMAGE_TO_TEXT_SYSTEM_INSTRUCTION,
+      userPrompt,
+      'gemini-2.5-flash',
+      [attachment],
+      undefined,
+      false,
+      75000
+    );
 
-      // Fallback if model returned raw markdown/text instead of JSON
-      const rawText = res.text.replace(/^```markdown\s*/i, '').replace(/```\s*$/i, '').trim();
-      const html = convertMarkdownOrTextToHtml(rawText);
+    if (!res || res.error || !res.text || !res.text.trim()) {
+      return {
+        text: '',
+        html: '',
+        tablesCount: 0,
+        documentTitle: attachment.name.replace(/\.[^/.]+$/, ''),
+        confidence: 'low',
+        extractedFields: [],
+        unclearSegments: [],
+        isComplete: false,
+        error: res?.error
+          ? `Failed to extract text from "${attachment.name}": ${res.error}`
+          : `No readable text could be extracted from "${attachment.name}". Please ensure the image is clear and upload it again.`,
+      };
+    }
+
+    let fullRaw = res.text.trim();
+
+    // Handle MAX_TOKENS continuation so lengthy textbook/document pages are never truncated
+    if (res.finishReason === 'MAX_TOKENS') {
+      const tailSnippet = fullRaw.slice(-300);
+      const contRes = await callGeminiApi(
+        IMAGE_TO_TEXT_SYSTEM_INSTRUCTION,
+        `Image Name: ${attachment.name}\nContinue transcribing the remaining text from this image starting immediately after:\n"${tailSnippet}"\nDo not repeat already transcribed lines. Return ONLY the remaining HTML content.`,
+        'gemini-2.5-flash',
+        [attachment],
+        undefined,
+        false,
+        65000
+      );
+      if (contRes && contRes.text && contRes.text.trim()) {
+        fullRaw = `${fullRaw}\n${contRes.text.trim()}`;
+      }
+    }
+
+    // Support both structured JSON responses and direct HTML/Markdown responses
+    const parsed = safeParseJson<any>(fullRaw);
+    if (parsed && (parsed.markdownText || parsed.htmlContent)) {
+      const rawText = (parsed.markdownText || htmlToPlainText(parsed.htmlContent || '')).trim();
+      const html = parsed.htmlContent
+        ? parsed.htmlContent.replace(/^```html\s*/i, '').replace(/```\s*$/i, '').trim()
+        : convertMarkdownOrTextToHtml(rawText);
       const tablesCount = (html.match(/<table/gi) || []).length;
       const unclearMatches = rawText.match(/\[Unclear:[^\]]+\]/gi) || [];
+      const plainCheck = htmlToPlainText(html);
+      if (plainCheck.length < 3) {
+        return {
+          text: '',
+          html: '',
+          tablesCount: 0,
+          documentTitle: attachment.name.replace(/\.[^/.]+$/, ''),
+          confidence: 'low',
+          extractedFields: [],
+          unclearSegments: unclearMatches,
+          isComplete: false,
+          error: `Image "${attachment.name}" produced empty text. Please upload a clearer image.`,
+        };
+      }
       return {
         text: rawText,
         html,
         tablesCount,
-        documentTitle: attachment.name.replace(/\.[^/.]+$/, ''),
-        confidence: unclearMatches.length > 2 ? 'low' : 'high',
-        extractedFields: [],
-        unclearSegments: unclearMatches,
+        documentTitle: parsed.documentTitle || attachment.name.replace(/\.[^/.]+$/, ''),
+        confidence: parsed.confidence || (unclearMatches.length > 2 ? 'low' : 'high'),
+        extractedFields: Array.isArray(parsed.extractedFields) ? parsed.extractedFields : [],
+        unclearSegments: Array.isArray(parsed.unclearSegments) ? parsed.unclearSegments : unclearMatches,
+        isComplete: true,
       };
     }
-  } catch (err) {
+
+    // Direct HTML or Markdown output
+    const cleaned = fullRaw
+      .replace(/^```(?:html|markdown|md)?\s*/i, '')
+      .replace(/```\s*$/i, '')
+      .trim();
+    const looksLikeHtml = /<(h[1-6]|p|ul|ol|li|table|div|blockquote)\b/i.test(cleaned);
+    const html = looksLikeHtml ? sanitizeChatHtml(cleaned) : convertMarkdownOrTextToHtml(cleaned);
+    const plainText = htmlToPlainText(html);
+
+    if (plainText.length < 3) {
+      return {
+        text: '',
+        html: '',
+        tablesCount: 0,
+        documentTitle: attachment.name.replace(/\.[^/.]+$/, ''),
+        confidence: 'low',
+        extractedFields: [],
+        unclearSegments: [],
+        isComplete: false,
+        error: `No meaningful text was detected in "${attachment.name}". Please upload a clearer image.`,
+      };
+    }
+
+    const tablesCount = (html.match(/<table/gi) || []).length;
+    const unclearMatches = plainText.match(/\[Unclear:[^\]]+\]/gi) || [];
+    const titleMatch = html.match(/<h[12][^>]*>(.*?)<\/h[12]>/i);
+    const detectedTitle = titleMatch
+      ? titleMatch[1].replace(/<[^>]+>/g, '').trim()
+      : attachment.name.replace(/\.[^/.]+$/, '');
+
+    return {
+      text: plainText,
+      html,
+      tablesCount,
+      documentTitle: detectedTitle,
+      confidence: unclearMatches.length > 3 ? 'low' : unclearMatches.length > 0 ? 'medium' : 'high',
+      extractedFields: [],
+      unclearSegments: unclearMatches,
+      isComplete: true,
+    };
+  } catch (err: any) {
     console.warn('Gemini vision OCR extraction failed:', err);
+    return {
+      text: '',
+      html: '',
+      tablesCount: 0,
+      documentTitle: attachment.name.replace(/\.[^/.]+$/, ''),
+      confidence: 'low',
+      extractedFields: [],
+      unclearSegments: [],
+      isComplete: false,
+      error: `Error extracting text from "${attachment.name}": ${err?.message || 'Unknown error'}`,
+    };
+  }
+}
+
+export interface MultiImageOCRResult {
+  combinedText: string;
+  combinedHtml: string;
+  pagesHtml: string[];
+  totalTablesCount: number;
+  processedCount: number;
+  failedImages: { name: string; reason: string }[];
+  unclearSegments: string[];
+  isComplete: boolean;
+  documentTitle: string;
+}
+
+/**
+ * Processes multiple uploaded images in exact order, preserving cross-page continuity
+ * and verifying extraction quality for every image.
+ */
+export async function extractTextFromMultipleImagesAI(
+  attachments: AIAttachment[],
+  customInstruction?: string,
+  onProgress?: (status: string) => void
+): Promise<MultiImageOCRResult> {
+  const imageAttachments = attachments.filter((a) => a.type === 'image' && a.dataUrl);
+  if (imageAttachments.length === 0) {
+    return {
+      combinedText: '',
+      combinedHtml: '',
+      pagesHtml: [],
+      totalTablesCount: 0,
+      processedCount: 0,
+      failedImages: [{ name: 'No image', reason: 'No valid image attachments were provided.' }],
+      unclearSegments: [],
+      isComplete: false,
+      documentTitle: 'Extracted Document',
+    };
   }
 
+  const pagesHtml: string[] = [];
+  const textParts: string[] = [];
+  const failedImages: { name: string; reason: string }[] = [];
+  const unclearSegments: string[] = [];
+  let totalTablesCount = 0;
+  let previousTail = '';
+  let detectedTitle = '';
+
+  for (let i = 0; i < imageAttachments.length; i++) {
+    const img = imageAttachments[i];
+    onProgress?.(`Extracting text from image ${i + 1} of ${imageAttachments.length} (${img.name})...`);
+    const res = await extractTextFromImageAI(img, customInstruction, previousTail || undefined);
+    if (!res.isComplete || !res.html.trim() || !res.text.trim()) {
+      failedImages.push({
+        name: img.name,
+        reason: res.error || 'No readable text could be extracted. Please upload a clearer image.',
+      });
+      continue;
+    }
+
+    if (!detectedTitle && res.documentTitle) {
+      detectedTitle = res.documentTitle;
+    }
+    pagesHtml.push(res.html);
+    textParts.push(
+      imageAttachments.length > 1
+        ? `--- Page ${i + 1} (${img.name}) ---\n${res.text}`
+        : res.text
+    );
+    totalTablesCount += res.tablesCount;
+    unclearSegments.push(...res.unclearSegments);
+
+    // Keep last 2 non-empty lines for cross-page continuity
+    const lines = res.text.split(/\n+/).map((l) => l.trim()).filter(Boolean);
+    previousTail = lines.slice(-2).join(' ').slice(-220);
+  }
+
+  const isComplete = pagesHtml.length > 0;
   return {
-    text: attachment.extractedText || `Could not extract text from ${attachment.name}`,
-    html: `<p>${attachment.extractedText || `Could not extract text from ${attachment.name}`}</p>`,
-    tablesCount: 0,
-    documentTitle: attachment.name.replace(/\.[^/.]+$/, ''),
-    confidence: 'low',
-    extractedFields: [],
-    unclearSegments: [],
+    combinedText: textParts.join('\n\n'),
+    combinedHtml: pagesHtml.join('\n<hr class="page-break" />\n'),
+    pagesHtml,
+    totalTablesCount,
+    processedCount: pagesHtml.length,
+    failedImages,
+    unclearSegments,
+    isComplete,
+    documentTitle: detectedTitle || imageAttachments[0].name.replace(/\.[^/.]+$/, ''),
   };
 }
 
@@ -3224,20 +3438,56 @@ export async function runWorkspaceAIPromptAsync(
     );
 
   if (isImageToTextPrompt && attachments) {
-    onProgress?.('Extracting text and tables from image with Gemini Vision...');
-    const targetImg = attachments.find((a) => a.type === 'image' && a.dataUrl)!;
-    const ocrResult = await extractTextFromImageAI(targetImg, prompt);
-    const summary = `Extracted readable text and structure from image "${targetImg.name}".`;
-    const chatResponse = `### Extracted Text from ${targetImg.name}\n\n${ocrResult.text}\n\n*${
-      ocrResult.tablesCount > 0 ? `Reconstructed ${ocrResult.tablesCount} table(s).` : 'Full document structure preserved.'
-    } You can review the extracted text above, or click below to insert it into the active page or append as a new page.*`;
+    const imageAttachments = attachments.filter((a) => a.type === 'image' && a.dataUrl);
+    onProgress?.(
+      imageAttachments.length > 1
+        ? `Extracting text from ${imageAttachments.length} images in order with Gemini Vision...`
+        : 'Extracting text and tables from image with Gemini Vision...'
+    );
+    const multiOcr = await extractTextFromMultipleImagesAI(imageAttachments, prompt, onProgress);
+
+    if (!multiOcr.isComplete || !multiOcr.combinedText.trim()) {
+      const failureDetails = multiOcr.failedImages
+        .map((f) => `- **${f.name}**: ${f.reason}`)
+        .join('\n');
+      return {
+        summary: 'Image-to-Text Extraction Failed',
+        chatResponse: `**Image-to-Text Extraction Could Not Be Completed:**\n\n${failureDetails || 'No readable text could be extracted.'}\n\nYour existing document was not modified.`,
+        generatedHtml: '',
+        action: 'conversation',
+        sources: imageAttachments.map((img) => ({ id: img.id, title: img.name, type: 'image' as const })),
+      };
+    }
+
+    const failedNote =
+      multiOcr.failedImages.length > 0
+        ? `\n\n> **Note:** ${multiOcr.failedImages.length} image(s) could not be read clearly and should be uploaded again:\n${multiOcr.failedImages.map((f) => `> - ${f.name}: ${f.reason}`).join('\n')}`
+        : '';
+
+    const unclearNote =
+      multiOcr.unclearSegments.length > 0
+        ? `\n\n> *${multiOcr.unclearSegments.length} unclear segment(s) marked with \`[Unclear: ...]\` for your review.*`
+        : '';
+
+    const summary =
+      imageAttachments.length > 1
+        ? `Extracted text from ${multiOcr.processedCount} of ${imageAttachments.length} image(s).`
+        : `Extracted readable text and structure from image "${imageAttachments[0].name}".`;
+
+    const chatResponse = `### Extracted Text (${multiOcr.processedCount} ${
+      multiOcr.processedCount === 1 ? 'Image' : 'Images'
+    })\n\n${multiOcr.combinedText}${failedNote}${unclearNote}\n\n*${
+      multiOcr.totalTablesCount > 0
+        ? `Reconstructed ${multiOcr.totalTablesCount} table(s). `
+        : 'Full document structure preserved. '
+    }Review or edit the extracted content below, then choose how to insert it into your document.*`;
 
     return {
       summary,
       chatResponse,
-      generatedHtml: ocrResult.html,
+      generatedHtml: multiOcr.combinedHtml,
       action: 'ocr_extract',
-      sources: [{ id: targetImg.id, title: targetImg.name, type: 'image' }],
+      sources: imageAttachments.map((img) => ({ id: img.id, title: img.name, type: 'image' as const })),
     };
   }
 
@@ -3785,100 +4035,81 @@ ${refBlock}
 }
 
 /**
- * Section 1: Mandatory AI-Powered Image-to-Document Conversion
- * Extracts printed & handwritten text, headings, lists, and tables (as real HTML <table> elements)
+ * Section 1 & Module 12: Mandatory AI-Powered Image-to-Document Conversion
+ * Supports 1 or multiple uploaded images in exact order, preserving structure, headings, lists, and HTML tables.
+ * Throws an explicit error if no API key is configured or if no meaningful text can be extracted.
  */
-export async function generateDocumentFromImageAI(
-  attachment: AIAttachment,
+export async function generateDocumentFromImagesAI(
+  attachments: AIAttachment[],
   userNotes: string = '',
-  optional: OptionalDetailsInput = {}
-): Promise<{ title: string; content: string; metadata: DocumentItem['metadata'] }> {
+  optional: OptionalDetailsInput = {},
+  onProgress?: (status: string) => void
+): Promise<{
+  title: string;
+  content: string;
+  pages?: string[];
+  failedImages?: { name: string; reason: string }[];
+  metadata: DocumentItem['metadata'];
+}> {
   const inst = optional.institution || 'University of Lagos (UNILAG)';
   const dept = optional.department || 'Academic Department';
   const student = optional.studentName || 'Student Name';
 
-  const systemInstruction = `
-You are an expert Document Recognition & AI OCR Engine.
-TASK: Mandatory Image-to-Document Conversion.
-Analyze the attached image and reconstruct its text, structure, headings, lists, and tables into a clean, complete editable HTML document body.
-REQUIREMENTS:
-1. Extract printed and legible handwritten text accurately.
-2. Structure headings (<h1>, <h2>, <h3>) and paragraphs (<p>).
-3. Reconstruct tables as valid, editable HTML <table><thead><tr><th>...</th></tr></thead><tbody>...</tbody></table> elements.
-4. Preserve lists (<ul>, <ol>, <li>).
-5. If text is illegible or unclear, label it as [Unclear: probable text] instead of inventing words.
-6. Return ONLY clean HTML document body without markdown code fences or conversational text.
-`.trim();
-
-  const userPrompt = `
-Image Filename: ${attachment.name}
-Additional Instructions: ${userNotes || 'Extract and reconstruct all text, headings, and tables from this image into an editable document.'}
-`.trim();
-
-  try {
-    const apiKey = getGeminiApiKey();
-    if (apiKey) {
-      const ocr = await extractTextFromImageAI(attachment, userNotes);
-      if (ocr && ocr.html && ocr.html.length > 30) {
-        let cleanHtml = ocr.html;
-        const titleMatch = cleanHtml.match(/<h[12][^>]*>(.*?)<\/h[12]>/i);
-        const title = titleMatch ? titleMatch[1].replace(/<[^>]+>/g, '').trim() : attachment.name.replace(/\.[^/.]+$/, '');
-        return {
-          title: title || 'Extracted Document from Image',
-          content: cleanHtml,
-          metadata: {
-            institution: inst,
-            department: dept,
-            studentName: student,
-            showPageNumbers: true,
-            fontFamily: 'Times New Roman',
-          },
-        };
-      }
-    }
-  } catch (err) {
-    console.warn('Gemini image OCR failed, falling back to structured reconstruction:', err);
+  const apiKey = getGeminiApiKey();
+  if (!apiKey) {
+    throw new Error(
+      'Gemini API key is not configured. Please add your Gemini API key in Settings or .env.local to convert images to documents.'
+    );
   }
 
-  // Fallback high-quality structured document reconstruction
-  const baseTitle = attachment.name.replace(/\.[^/.]+$/, '').replace(/[-_]/g, ' ');
-  const title = `Extracted Document: ${baseTitle.charAt(0).toUpperCase() + baseTitle.slice(1)}`;
-  const content = `
-    <h1>${title.toUpperCase()}</h1>
-    <div style="background-color: #F8FAFC; border-left: 3px solid #1447E6; padding: 10px 14px; margin-bottom: 18px; font-size: 10.5pt; color: #334155;">
-      <strong>Source Image:</strong> ${attachment.name} (${attachment.sizeFormatted}) &nbsp;|&nbsp; <strong>Extraction Engine:</strong> AI OCR &amp; Document Reconstruction
-    </div>
-    <h2>1. Reconstructed Content &amp; Findings</h2>
-    <p>${attachment.extractedText || 'Extracted printed and handwritten lecture notes, empirical tables, and theoretical definitions.'}</p>
-    <h2>2. Extracted Data &amp; Observations</h2>
-    <table>
-      <thead>
-        <tr><th>Item / Parameter</th><th>Observed Value</th><th>Classification</th><th>Remarks</th></tr>
-      </thead>
-      <tbody>
-        <tr><td>Observation 1</td><td>84.5% Metric Index</td><td>Primary Indicator</td><td>High concordance with baseline</td></tr>
-        <tr><td>Observation 2</td><td>62.0% Adoption Rate</td><td>Operational Focus</td><td>Significant institutional uptake</td></tr>
-        <tr><td>Observation 3</td><td>91.2% Compliance</td><td>Quality Standard</td><td>Exceeds regulatory criteria</td></tr>
-      </tbody>
-    </table>
-    <h2>3. Summary &amp; Key Action Points</h2>
-    <ul>
-      <li>All core definitions and structural classifications have been faithfully transferred to the document editor.</li>
-      <li>Tabular figures and numerical metrics are preserved in editable table cells.</li>
-      <li>Formatting aligns with academic presentation standards.</li>
-    </ul>
-  `;
+  const imageAttachments = attachments.filter((a) => a.type === 'image' && a.dataUrl);
+  if (imageAttachments.length === 0) {
+    throw new Error('No valid image files were provided. Please upload at least one PNG, JPG, or WEBP image.');
+  }
+
+  const multiOcr = await extractTextFromMultipleImagesAI(imageAttachments, userNotes, onProgress);
+  if (!multiOcr.isComplete || multiOcr.pagesHtml.length === 0) {
+    const reasons = multiOcr.failedImages.map((f) => `${f.name}: ${f.reason}`).join(' | ');
+    throw new Error(
+      reasons || 'No readable text could be extracted from the uploaded image(s). Please upload clearer images and try again.'
+    );
+  }
+
+  const partialWarningBanner =
+    multiOcr.failedImages.length > 0
+      ? `<div style="background-color: #FEF2F2; border-left: 3px solid #B91C1C; padding: 10px 14px; margin-bottom: 16px; font-size: 10.5pt; color: #7F1D1D;"><strong>Notice:</strong> ${multiOcr.failedImages.length} image(s) could not be read clearly and should be uploaded again: ${multiOcr.failedImages.map((f) => f.name).join(', ')}.</div>\n`
+      : '';
+
+  const pages = multiOcr.pagesHtml.map((pageHtml, idx) =>
+    idx === 0 && partialWarningBanner ? `${partialWarningBanner}${pageHtml}` : pageHtml
+  );
 
   return {
-    title,
-    content,
+    title: multiOcr.documentTitle || `Converted - ${imageAttachments[0].name.replace(/\.[^/.]+$/, '')}`,
+    content: pages.join('\n<hr class="page-break" />\n'),
+    pages,
+    failedImages: multiOcr.failedImages,
     metadata: {
       institution: inst,
       department: dept,
       studentName: student,
       showPageNumbers: true,
       fontFamily: 'Times New Roman',
+      pages,
     },
+  };
+}
+
+export async function generateDocumentFromImageAI(
+  attachment: AIAttachment,
+  userNotes: string = '',
+  optional: OptionalDetailsInput = {}
+): Promise<{ title: string; content: string; metadata: DocumentItem['metadata'] }> {
+  const result = await generateDocumentFromImagesAI([attachment], userNotes, optional);
+  return {
+    title: result.title,
+    content: result.content,
+    metadata: result.metadata,
   };
 }
 

@@ -332,6 +332,8 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
   const [aiUploadedRefs, setAiUploadedRefs] = useState<AIAttachment[]>([]);
   const [isAiLoading, setIsAiLoading] = useState(false);
   const [aiProgressMessage, setAiProgressMessage] = useState('');
+  const [reviewingMsgId, setReviewingMsgId] = useState<string | null>(null);
+  const [reviewedHtmlDraft, setReviewedHtmlDraft] = useState<string>('');
 
   // Requirement 8: Real-time Voice-to-Text in Main AI Assistant (Instant live dictation)
   const {
@@ -2216,6 +2218,30 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
         el.scrollIntoView({ behavior: 'smooth', block: 'center' });
       }
     }, 100);
+  };
+
+  const handleReplaceSelectionWithAiContent = (contentHtml: string) => {
+    const sel = window.getSelection();
+    if (sel && sel.rangeCount > 0 && !sel.isCollapsed) {
+      const range = sel.getRangeAt(0);
+      const targetPageIdx = pageRefs.current.findIndex(
+        (el) => el && el.contains(range.commonAncestorContainer)
+      );
+      if (targetPageIdx !== -1 && pageRefs.current[targetPageIdx]) {
+        range.deleteContents();
+        const frag = range.createContextualFragment(contentHtml);
+        range.insertNode(frag);
+        const updatedHtml = pageRefs.current[targetPageIdx]!.innerHTML;
+        const nextPages = [...pages];
+        nextPages[targetPageIdx] = updatedHtml;
+        setPages(nextPages);
+        triggerAutoSave({
+          overrideHtml: getCombinedCleanHtml(nextPages),
+        });
+        return;
+      }
+    }
+    handleInsertAiContentToCurrentPage(contentHtml);
   };
 
   const handleSendAiPrompt = () => {
@@ -5957,46 +5983,103 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
                         </div>
                       )}
 
-                      {/* Action buttons if content can be inserted or copied */}
+                      {/* Action buttons if content can be reviewed, inserted, replaced, or copied */}
                       {msg.generatedHtml && (
-                        <div
-                          style={{
-                            marginTop: '8px',
-                            display: 'flex',
-                            gap: '6px',
-                            flexWrap: 'wrap',
-                          }}
-                        >
-                          <button
-                            type="button"
-                            onClick={() => handleInsertAiContentToCurrentPage(msg.generatedHtml!)}
-                            className="btn-ed-subtle"
-                            style={{ fontSize: '10px', padding: '3px 8px' }}
-                            title="Insert content into the active page"
-                          >
-                            + Insert into Page {(activePageAiIdx !== null ? activePageAiIdx : activePageIdxRef.current) + 1}
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => handleAppendAiContentAsNewPage(msg.generatedHtml!)}
-                            className="btn-ed-subtle"
-                            style={{ fontSize: '10px', padding: '3px 8px' }}
-                            title="Append content as a new page"
-                          >
-                            + Append as New Page
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              navigator.clipboard.writeText(msg.chatResponse || msg.generatedHtml || '');
-                              alert('Copied to clipboard!');
+                        <div style={{ marginTop: '8px', display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                          {reviewingMsgId === msg.id && (
+                            <textarea
+                              value={reviewedHtmlDraft}
+                              onChange={(e) => setReviewedHtmlDraft(e.target.value)}
+                              rows={5}
+                              className="ed-input"
+                              style={{
+                                width: '100%',
+                                fontSize: '11px',
+                                fontFamily: 'var(--font-mono)',
+                                resize: 'vertical',
+                              }}
+                              aria-label="Review or edit extracted HTML before inserting"
+                            />
+                          )}
+                          <div
+                            style={{
+                              display: 'flex',
+                              gap: '6px',
+                              flexWrap: 'wrap',
                             }}
-                            className="btn-ed-subtle"
-                            style={{ fontSize: '10px', padding: '3px 8px' }}
-                            title="Copy text"
                           >
-                            Copy
-                          </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                if (reviewingMsgId === msg.id) {
+                                  setReviewingMsgId(null);
+                                } else {
+                                  setReviewingMsgId(msg.id);
+                                  setReviewedHtmlDraft(msg.generatedHtml!);
+                                }
+                              }}
+                              className="btn-ed-subtle"
+                              style={{ fontSize: '10px', padding: '3px 8px' }}
+                              title="Review or edit extracted content before inserting"
+                            >
+                              {reviewingMsgId === msg.id ? 'Done Reviewing' : 'Review / Edit'}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() =>
+                                handleInsertAiContentToCurrentPage(
+                                  reviewingMsgId === msg.id ? reviewedHtmlDraft : msg.generatedHtml!
+                                )
+                              }
+                              className="btn-ed-subtle"
+                              style={{ fontSize: '10px', padding: '3px 8px' }}
+                              title="Insert content into the active page"
+                            >
+                              + Insert into Page {(activePageAiIdx !== null ? activePageAiIdx : activePageIdxRef.current) + 1}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() =>
+                                handleReplaceSelectionWithAiContent(
+                                  reviewingMsgId === msg.id ? reviewedHtmlDraft : msg.generatedHtml!
+                                )
+                              }
+                              className="btn-ed-subtle"
+                              style={{ fontSize: '10px', padding: '3px 8px' }}
+                              title="Replace currently selected text in the editor (or insert on active page if nothing is selected)"
+                            >
+                              Replace Selection
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() =>
+                                handleAppendAiContentAsNewPage(
+                                  reviewingMsgId === msg.id ? reviewedHtmlDraft : msg.generatedHtml!
+                                )
+                              }
+                              className="btn-ed-subtle"
+                              style={{ fontSize: '10px', padding: '3px 8px' }}
+                              title="Append content as a new page"
+                            >
+                              + Append as New Page
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                navigator.clipboard.writeText(
+                                  reviewingMsgId === msg.id
+                                    ? reviewedHtmlDraft
+                                    : msg.chatResponse || msg.generatedHtml || ''
+                                );
+                                alert('Copied to clipboard!');
+                              }}
+                              className="btn-ed-subtle"
+                              style={{ fontSize: '10px', padding: '3px 8px' }}
+                              title="Copy text"
+                            >
+                              Copy
+                            </button>
+                          </div>
                         </div>
                       )}
 

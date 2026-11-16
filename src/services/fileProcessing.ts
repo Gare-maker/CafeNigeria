@@ -1,5 +1,4 @@
 import { AIAttachment } from '../types';
-import { extractTextFromImageAI, getGeminiApiKey } from './aiGenerator';
 
 /**
  * Formats byte size into human-readable format (KB, MB)
@@ -157,6 +156,15 @@ export async function readDocumentFile(file: File): Promise<string> {
   return `Document "${file.name}" (${formatFileSize(file.size)}). Contains structured academic content, empirical data, and references.`;
 }
 
+const SUPPORTED_IMAGE_MIME_TYPES = new Set([
+  'image/png',
+  'image/jpeg',
+  'image/jpg',
+  'image/webp',
+  'image/gif',
+  'image/bmp',
+]);
+
 /**
  * Comprehensive parser for any uploaded file (Images, PDFs, DOCX, TXT)
  * Generates an AIAttachment with thumbnail, size, type, and extracted reference text.
@@ -167,29 +175,20 @@ export async function processUploadedFile(file: File): Promise<AIAttachment> {
   const sizeFormatted = formatFileSize(file.size);
   const id = `att-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
 
-  if (isImage) {
-    const dataUrl = await readImageAsDataUrl(file);
-    let extractedText = `Image file "${file.name}" (${sizeFormatted}). Visual content includes printed/handwritten text and tables.`;
+  if (file.size === 0) {
+    throw new Error(`File "${file.name}" is empty (0 bytes). Please upload a valid file.`);
+  }
 
-    // Attempt high-fidelity Gemini Vision OCR if API key is configured
-    try {
-      const apiKey = getGeminiApiKey();
-      if (apiKey) {
-        const ocr = await extractTextFromImageAI({
-          id,
-          name: file.name,
-          type: 'image',
-          fileType: ext.toUpperCase(),
-          sizeFormatted,
-          dataUrl,
-          extractedText: '',
-        });
-        if (ocr && ocr.text && ocr.text.trim().length > 15) {
-          extractedText = ocr.text.trim();
-        }
-      }
-    } catch (err) {
-      console.warn('Image vision extraction skipped:', err);
+  if (isImage) {
+    const normalizedType = file.type.toLowerCase();
+    if (!SUPPORTED_IMAGE_MIME_TYPES.has(normalizedType)) {
+      throw new Error(
+        `Unsupported image format "${file.type}" for "${file.name}". Supported formats: PNG, JPG/JPEG, WEBP, GIF, BMP.`
+      );
+    }
+    const dataUrl = await readImageAsDataUrl(file);
+    if (!dataUrl || !dataUrl.startsWith('data:image/')) {
+      throw new Error(`Failed to encode image "${file.name}". Please try another file.`);
     }
 
     return {
@@ -199,7 +198,7 @@ export async function processUploadedFile(file: File): Promise<AIAttachment> {
       fileType: ext.toUpperCase(),
       sizeFormatted,
       dataUrl,
-      extractedText,
+      extractedText: '',
       rawFile: file,
     };
   }

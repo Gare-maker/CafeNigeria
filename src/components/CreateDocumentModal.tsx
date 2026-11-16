@@ -34,7 +34,7 @@ import {
   getCurrentFormattedDate,
   modifyExistingDocumentWithAI,
   modifyExistingDocumentWithAIAsync,
-  generateDocumentFromImageAI,
+  generateDocumentFromImagesAI,
 } from '../services/aiGenerator';
 import { openDocumentFromComputerFile } from '../services/exportService';
 import { processMultipleFiles } from '../services/fileProcessing';
@@ -96,6 +96,7 @@ export const CreateDocumentModal: React.FC<CreateDocumentModalProps> = ({
   const [uploadedFiles, setUploadedFiles] = useState<AIAttachment[]>([]);
   const [showWorkspaceDocPicker, setShowWorkspaceDocPicker] = useState(false);
   const [extractionStatus, setExtractionStatus] = useState<string>('');
+  const [imageConversionError, setImageConversionError] = useState<string | null>(null);
 
   // Optional Academic Details (Collapsed by default)
   const [showOptional, setShowOptional] = useState(false);
@@ -243,12 +244,16 @@ export const CreateDocumentModal: React.FC<CreateDocumentModalProps> = ({
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(e.target.files || []);
     if (files.length === 0) return;
+    setImageConversionError(null);
 
     try {
       const processed = await processMultipleFiles(files);
       setUploadedFiles((prev) => [...prev, ...processed]);
-    } catch (err) {
+    } catch (err: any) {
       console.error('Failed to process uploaded files:', err);
+      setImageConversionError(
+        err?.message || 'Failed to read one or more uploaded files. Please ensure they are valid PNG, JPG, or WEBP images.'
+      );
     }
     e.target.value = '';
   };
@@ -315,30 +320,39 @@ export const CreateDocumentModal: React.FC<CreateDocumentModalProps> = ({
       .filter(Boolean)
       .join(' ');
 
-    // For Image-to-Document, task is strictly image reconstruction:
+    // For Image-to-Document, task is strictly image reconstruction (1 or multiple images in order):
     if (category === 'image-to-notes') {
-      const imgAttachment = uploadedFiles.find((f) => f.type === 'image') || uploadedFiles[0];
-      if (!imgAttachment) return;
+      const imgAttachments = uploadedFiles.filter((f) => f.type === 'image');
+      if (imgAttachments.length === 0) {
+        setImageConversionError('Please upload at least one image (PNG, JPG, WEBP) to convert.');
+        return;
+      }
 
+      setImageConversionError(null);
       setIsGenerating(true);
-      setExtractionStatus('Reading image and inspecting document layout...');
+      setExtractionStatus(
+        imgAttachments.length > 1
+          ? `Extracting text from ${imgAttachments.length} images in order...`
+          : 'Reading image and extracting text with Gemini Vision...'
+      );
       const todayFormatted = getCurrentFormattedDate();
 
-      setTimeout(() => {
-        setExtractionStatus('Extracting printed & handwritten text and reconstructing tables...');
-      }, 700);
-
       try {
-        const generated = await generateDocumentFromImageAI(imgAttachment, combinedPrompt, {
-          institution: institution.trim() || undefined,
-          department: department.trim() || undefined,
-          courseCode: courseCode.trim() || undefined,
-          studentName: studentName.trim() || undefined,
-        });
+        const generated = await generateDocumentFromImagesAI(
+          imgAttachments,
+          combinedPrompt,
+          {
+            institution: institution.trim() || undefined,
+            department: department.trim() || undefined,
+            courseCode: courseCode.trim() || undefined,
+            studentName: studentName.trim() || undefined,
+          },
+          (status) => setExtractionStatus(status)
+        );
 
         const newDoc: DocumentItem = {
           id: `doc-${Date.now()}`,
-          title: generated.title || `Converted - ${imgAttachment.name.replace(/\.[^/.]+$/, '')}`,
+          title: generated.title || `Converted - ${imgAttachments[0].name.replace(/\.[^/.]+$/, '')}`,
           category: 'image-to-notes',
           content: generated.content,
           createdAt: todayFormatted,
@@ -351,6 +365,7 @@ export const CreateDocumentModal: React.FC<CreateDocumentModalProps> = ({
             layout: DEFAULT_PAGE_LAYOUT,
             orientation: 'portrait',
             marginSize: 'normal',
+            pages: generated.pages || generated.metadata?.pages,
           },
           aiHistory: [],
         };
@@ -358,10 +373,13 @@ export const CreateDocumentModal: React.FC<CreateDocumentModalProps> = ({
         setIsGenerating(false);
         setExtractionStatus('');
         onDocumentCreated(newDoc, false);
-      } catch (err) {
+      } catch (err: any) {
         console.error('Image to document error:', err);
         setIsGenerating(false);
         setExtractionStatus('');
+        setImageConversionError(
+          err?.message || 'Image-to-text extraction failed. Please check your Gemini API key and image clarity.'
+        );
       }
       return;
     }
@@ -704,6 +722,7 @@ export const CreateDocumentModal: React.FC<CreateDocumentModalProps> = ({
                   <input
                     type="file"
                     accept="image/*"
+                    multiple
                     onChange={handleFileUpload}
                     style={{ display: 'none' }}
                   />
@@ -722,7 +741,7 @@ export const CreateDocumentModal: React.FC<CreateDocumentModalProps> = ({
                 >
                   <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
                     <span style={{ fontSize: '12.5px', fontWeight: 700, color: 'var(--ink-navy)' }}>
-                      Selected Image for Reconstruction:
+                      Selected Images ({uploadedFiles.length}) — Processed in Order:
                     </span>
                     <label
                       style={{
@@ -733,15 +752,35 @@ export const CreateDocumentModal: React.FC<CreateDocumentModalProps> = ({
                         fontWeight: 600,
                       }}
                     >
-                      Choose Different Image
+                      + Add More Images
                       <input
                         type="file"
                         accept="image/*"
+                        multiple
                         onChange={handleFileUpload}
                         style={{ display: 'none' }}
                       />
                     </label>
                   </div>
+
+                  {imageConversionError && (
+                    <div
+                      style={{
+                        padding: '10px 14px',
+                        backgroundColor: '#FEF2F2',
+                        border: '1px solid #FECACA',
+                        borderRadius: '6px',
+                        fontSize: '12px',
+                        color: '#B91C1C',
+                        display: 'flex',
+                        alignItems: 'flex-start',
+                        gap: '8px',
+                      }}
+                    >
+                      <AlertCircle size={15} style={{ flexShrink: 0, marginTop: '2px' }} />
+                      <span>{imageConversionError}</span>
+                    </div>
+                  )}
 
                   {/* Immediate Thumbnail Preview & Card */}
                   <AIAttachmentsPreview
